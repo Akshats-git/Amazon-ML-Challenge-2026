@@ -1,0 +1,29 @@
+# Environments
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Data & artifacts (never commit the challenge dataset or big binaries)
+data/
+models/
+oof/
+submissions/
+*.npy
+*.npz
+*.parquet
+*.pkl
+*.joblib
+*.pt
+*.bin
+*.safetensors
+*.tar.gz
+*.zip
+catboost_info/
+lightning_logs/
+wandb/
+
+# Secrets
+.env
+*.pem
+experiments_team/

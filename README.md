@@ -44,4 +44,3 @@ data/ models/ oof/ submissions/   git-ignored
 - One set of folds for the whole team: `oof/folds.npy`.
 - Every experiment saves `oof/<name>_oof.npy` and `oof/<name>_test.npy` and calls `log_experiment(...)`.
 - Submissions go only through `amlc.submit.write_submission`.
-# Amazon-ML-Challenge-2026
