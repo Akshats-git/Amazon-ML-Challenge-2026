@@ -19,9 +19,11 @@ has torch. If needed, set `AMLC_ROOT` to the repo path.
 ## Layout
 
 ```
-Context/                  challenge info (official details, prep notes, AWS guide)
+docs/problem/             official problem statement, formatted copy, video transcript
+docs/context/             challenge details, AWS prep-session notes, AWS credits guide
+docs/Documentation_template.md  official methodology template (goes in the final zip, keep the name)
 PLAYBOOK.md               how we run the 72 hours
-docs/approach_template.md 1-2 page approach doc skeleton (submission requirement)
+docs/approach_template.md generic approach-doc skeleton (superseded by the official template)
 src/amlc/
   config.py    paths (data/raw, data/features, oof/, submissions/ …), seed, n_folds
   metrics.py   smape, mape_score (2023), entity_f1 (2024), rmse, f1 … + registry
@@ -33,9 +35,12 @@ src/amlc/
 notebooks/01_eda_baseline.py  EDA → metric sanity → folds → TF-IDF baseline → embeddings+LGBM → blend
 scripts/
   check_env.py             stack smoke test
+  validate_submission.py   OFFICIAL validator for matching_results.tsv / candidate_pairs.tsv
   make_submission_zip.sh   final code zip (excludes data/models)
   aws_check.sh             verify the challenge AWS profile, quotas, running endpoints
 data/ models/ oof/ submissions/   git-ignored
+data/raw/train/           train_source{1,2,3}.tsv, train_ground_truth.tsv (official names)
+data/raw/test/            test_source{1,2,3}.tsv
 ```
 
 ## Conventions

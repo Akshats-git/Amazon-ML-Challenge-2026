@@ -1,10 +1,9 @@
-"""Cached text / image embeddings -> features for GBDTs or small heads.
+"""Cached text embeddings of names/addresses (optional add-on, not used by the baseline).
 
-Everything is cached to data/features/<name>.npy (float16), so each embedding is paid
-for once per team: compute it on whichever machine has the GPU, share the .npy file.
-
-Laptop GPU is a GTX 1650 (4 GB): stick to small/base encoders here and use a bigger
-GPU (Kaggle / SageMaker) for anything larger.
+Useful as an extra blocking channel (dense nearest neighbours catch transliterations and
+synonyms that char n-grams miss) or as pair features (cosine of name embeddings).
+Cached to data/features/<name>.npy (float16): compute once on the biggest GPU, share the file.
+~12M strings with multilingual-e5-small likely take over an hour on the laptop GPU; a cloud T4 is faster.
 """
 from pathlib import Path
 
@@ -13,11 +12,9 @@ import numpy as np
 from .config import FEATURES
 from .utils import free_memory, get_device
 
-# Good small defaults that fit in 4 GB with fp16
-TEXT_MODEL = "BAAI/bge-small-en-v1.5"          # 33M params, 384-d
-TEXT_MODEL_MULTI = "intfloat/multilingual-e5-small"
-IMAGE_MODEL = "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"  # 512-d, fast, safetensors (openai/* repos lack them)
-IMAGE_MODEL_ALT = "google/siglip-base-patch16-224"
+# Challenge rule: final model must be MIT / Apache-2.0 and <= 8B params. Both below are MIT.
+TEXT_MODEL = "intfloat/multilingual-e5-small"   # 118M, 384-d, handles Hindi/Tamil/French; use prefix="query: "
+TEXT_MODEL_EN = "BAAI/bge-small-en-v1.5"        # 33M, 384-d, English only
 
 
 def _cached(name: str | None):
@@ -51,66 +48,6 @@ def embed_texts(
     texts = [prefix + ("" if t is None or t != t else str(t)) for t in texts]
     emb = model.encode(texts, batch_size=batch_size, show_progress_bar=True,
                        normalize_embeddings=normalize, convert_to_numpy=True).astype(np.float16)
-    del model
-    free_memory()
-    if path is not None:
-        np.save(path, emb)
-    return emb
-
-
-def embed_images(
-    paths,
-    model_name: str = IMAGE_MODEL,
-    cache_name: str | None = None,
-    batch_size: int = 64,
-    num_workers: int = 6,
-    normalize: bool = True,
-) -> np.ndarray:
-    """CLIP/SigLIP image embeddings. Missing or corrupt images get an all-zero row."""
-    path, hit = _cached(cache_name)
-    if hit is not None:
-        print(f"loaded cached {path.name} {hit.shape}")
-        return hit
-    import torch
-    from PIL import Image
-    from torch.utils.data import DataLoader, Dataset
-    from tqdm.auto import tqdm
-    from transformers import AutoModel, AutoProcessor
-
-    device = get_device()
-    dtype = torch.float16 if device == "cuda" else torch.float32
-    model = AutoModel.from_pretrained(model_name, dtype=dtype).to(device).eval()
-    processor = AutoProcessor.from_pretrained(model_name)
-
-    class _DS(Dataset):
-        def __len__(self):
-            return len(paths)
-
-        def __getitem__(self, i):
-            p = paths[i]
-            try:
-                return Image.open(p).convert("RGB"), True
-            except Exception:
-                return Image.new("RGB", (224, 224)), False
-
-    def collate(batch):
-        imgs, ok = zip(*batch)
-        return processor(images=list(imgs), return_tensors="pt")["pixel_values"], torch.tensor(ok)
-
-    paths = [str(p) if p is not None else "" for p in paths]
-    dl = DataLoader(_DS(), batch_size=batch_size, num_workers=num_workers, collate_fn=collate)
-    out = []
-    with torch.inference_mode():
-        for px, ok in tqdm(dl, desc="image emb"):
-            feats = model.get_image_features(pixel_values=px.to(device, dtype))
-            if not torch.is_tensor(feats):  # newer transformers may return a ModelOutput
-                emb = getattr(feats, "image_embeds", None)
-                feats = emb if emb is not None else feats.pooler_output
-            if normalize:
-                feats = torch.nn.functional.normalize(feats.float(), dim=-1)
-            feats[~ok.to(device)] = 0
-            out.append(feats.float().cpu().numpy().astype(np.float16))
-    emb = np.concatenate(out)
     del model
     free_memory()
     if path is not None:

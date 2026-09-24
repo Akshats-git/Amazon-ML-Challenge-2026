@@ -92,7 +92,7 @@ Pay for the embedding or feature extraction **once**, on the biggest GPU, then s
        (and/or `ml.g5.xlarge`) = 1. **New accounts usually start at 0.**
 4. [ ] SageMaker AI → Notebook instances → `ml-challenge-notebook`, `ml.t3.medium`, new IAM role. **Stop it (don't delete it) when idle.**
 5. [ ] One teammate creates the team bucket `amlc26-<team>` and adds the cross-account bucket policy
-       from `Context/aws-builder-center-free-tier-instructions.md`. Keep everyone in us-east-1 to avoid transfer costs.
+       from `docs/context/aws_free_tier_and_credits_guide.md`. Keep everyone in us-east-1 to avoid transfer costs.
 6. [ ] Redeem any credit codes (top-500 bonus): Billing → Credits → Redeem.
 7. [ ] Check Billing → Free Tier daily. **Never leave a GPU instance or an endpoint running.**
 

@@ -7,7 +7,7 @@
 #   bash scripts/team_sync.sh raw  s3://amlc26-<team>      # pull the raw dataset too (data/raw)
 #
 # Uses AWS_PROFILE (default: amlc). Teammates need the bucket policy from
-# Context/aws-builder-center-free-tier-instructions.md. Never add --delete here.
+# docs/context/aws_free_tier_and_credits_guide.md. Never add --delete here.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export AWS_PROFILE="${AWS_PROFILE:-amlc}"

@@ -1,102 +1,60 @@
-"""Metrics, including the ones used in previous Amazon ML Challenges.
+"""Official metric (macro F_0.5 per Source-1 entity) + blocking diagnostics.
 
-Swap in the official metric as soon as the problem statement is out and
-ALWAYS reproduce it exactly (read the definition, check edge cases like zeros).
+All functions take *pair frames* with columns s1_id, cand_id (one row per link).
+
+Official rules reproduced exactly:
+  * per S1 entity: F_b = (1+b^2) * TP / (b^2 * |truth| + |pred|)
+  * truth empty and pred empty  -> 1.0   (correct singleton)
+  * truth empty and pred non-empty, or pred empty and truth non-empty -> 0.0
+  * averaged over ALL S1 entities in the evaluation set (singletons included)
+Check: pred {47,193,812}, truth {47,812} -> 1.25*2 / (0.25*2 + 3) = 0.714 (matches the PDF example).
 """
-import numpy as np
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    roc_auc_score,
-)
+import polars as pl
+
+from .config import BETA
 
 
-def smape(y_true, y_pred) -> float:
-    """Symmetric MAPE in percent: 0 is perfect, 200 is worst. (AMLC 2025, price prediction.)
+def _counts(pairs: pl.DataFrame, name: str) -> pl.DataFrame:
+    return pairs.unique(["s1_id", "cand_id"]).group_by("s1_id").len(name=name)
 
-    Rows where both values are 0 count as 0 error.
+
+def per_entity_fbeta(pred: pl.DataFrame, truth: pl.DataFrame, s1_ids, beta: float = BETA) -> pl.DataFrame:
+    """One row per S1 id: n_pred, n_true, tp, precision, recall, f."""
+    b2 = beta * beta
+    tp = pred.unique(["s1_id", "cand_id"]).join(truth.unique(["s1_id", "cand_id"]), on=["s1_id", "cand_id"])
+    base = pl.DataFrame({"s1_id": pl.Series(s1_ids, dtype=pl.Utf8)}).unique()
+    df = (
+        base.join(_counts(pred, "n_pred"), on="s1_id", how="left")
+        .join(_counts(truth, "n_true"), on="s1_id", how="left")
+        .join(tp.group_by("s1_id").len(name="tp"), on="s1_id", how="left")
+        .fill_null(0)
+    )
+    return df.with_columns(
+        precision=pl.when(pl.col("n_pred") > 0).then(pl.col("tp") / pl.col("n_pred")),
+        recall=pl.when(pl.col("n_true") > 0).then(pl.col("tp") / pl.col("n_true")),
+        f=pl.when((pl.col("n_pred") == 0) & (pl.col("n_true") == 0)).then(1.0)
+        .otherwise((1 + b2) * pl.col("tp") / (b2 * pl.col("n_true") + pl.col("n_pred"))),
+    )
+
+
+def fbeta_macro(pred: pl.DataFrame, truth: pl.DataFrame, s1_ids, beta: float = BETA) -> float:
+    return float(per_entity_fbeta(pred, truth, s1_ids, beta)["f"].mean())
+
+
+def blocking_report(cands: pl.DataFrame, truth: pl.DataFrame, s1_ids, beta: float = BETA) -> dict:
+    """How good is the candidate set, before any model?
+
+    pair_recall   share of true links that survived blocking (the recall ceiling)
+    oracle_f      macro F_0.5 of a perfect matcher restricted to these candidates
+    pairs_per_s1  candidate volume (drives feature/model cost)
     """
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-    denom = (np.abs(y_true) + np.abs(y_pred)) / 2
-    err = np.divide(np.abs(y_pred - y_true), denom, out=np.zeros_like(denom), where=denom != 0)
-    return float(100 * err.mean())
-
-
-def mape_score(y_true, y_pred) -> float:
-    """AMLC 2023 style: score = max(0, 100 * (1 - MAPE)). Higher is better."""
-    y_true = np.asarray(y_true, dtype=float)
-    y_pred = np.asarray(y_pred, dtype=float)
-    mape = np.mean(np.abs(y_true - y_pred) / np.abs(y_true))
-    return float(max(0.0, 100 * (1 - mape)))
-
-
-def entity_f1(y_true, y_pred) -> float:
-    """AMLC 2024 style F1 for string extraction, where "" means 'no prediction'.
-
-    TP: pred != "" and gt != "" and pred == gt
-    FP: pred != "" and (gt == "" or pred != gt)
-    FN: pred == "" and gt != ""
-    """
-    tp = fp = fn = 0
-    for gt, out in zip(y_true, y_pred, strict=True):
-        gt = "" if gt is None or (isinstance(gt, float) and np.isnan(gt)) else str(gt).strip()
-        out = "" if out is None or (isinstance(out, float) and np.isnan(out)) else str(out).strip()
-        if out and gt and out == gt:
-            tp += 1
-        elif out:
-            fp += 1
-        elif gt:
-            fn += 1
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
-    return 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-
-
-def rmse(y_true, y_pred) -> float:
-    return float(np.sqrt(mean_squared_error(y_true, y_pred)))
-
-
-def rmsle(y_true, y_pred) -> float:
-    return float(np.sqrt(mean_squared_error(np.log1p(y_true), np.log1p(np.clip(y_pred, 0, None)))))
-
-
-def mae(y_true, y_pred) -> float:
-    return float(mean_absolute_error(y_true, y_pred))
-
-
-def macro_f1(y_true, y_pred) -> float:
-    return float(f1_score(y_true, y_pred, average="macro"))
-
-
-def micro_f1(y_true, y_pred) -> float:
-    return float(f1_score(y_true, y_pred, average="micro"))
-
-
-def accuracy(y_true, y_pred) -> float:
-    return float(accuracy_score(y_true, y_pred))
-
-
-def auc(y_true, y_score) -> float:
-    return float(roc_auc_score(y_true, y_score))
-
-
-# name -> (function, greater_is_better)
-METRICS = {
-    "smape": (smape, False),
-    "mape_score": (mape_score, True),
-    "entity_f1": (entity_f1, True),
-    "rmse": (rmse, False),
-    "rmsle": (rmsle, False),
-    "mae": (mae, False),
-    "macro_f1": (macro_f1, True),
-    "micro_f1": (micro_f1, True),
-    "accuracy": (accuracy, True),
-    "auc": (auc, True),
-}
-
-
-def get_metric(name: str):
-    return METRICS[name]
+    hit = truth.join(cands.select("s1_id", "cand_id").unique(), on=["s1_id", "cand_id"], how="semi")
+    n_s1 = len(set(s1_ids))
+    rep = {
+        "pair_recall": hit.height / max(truth.height, 1),
+        "oracle_f": fbeta_macro(hit, truth, s1_ids, beta),
+        "n_pairs": cands.height,
+        "pairs_per_s1": cands.height / max(n_s1, 1),
+    }
+    print("blocking: " + ", ".join(f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v:,}" for k, v in rep.items()))
+    return rep

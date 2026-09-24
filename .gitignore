@@ -27,3 +27,6 @@ wandb/
 .env
 *.pem
 experiments_team/
+
+# OS junk
+.DS_Store

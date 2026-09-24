@@ -1,7 +1,7 @@
 [project]
 name = "amlc"
 version = "0.1.0"
-description = "Amazon ML Challenge 2026 - team workspace"
+description = "Amazon ML Challenge 2026 - business entity resolution"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -17,19 +17,16 @@ dependencies = [
     "lightgbm",
     "catboost",
     "optuna",
-    # deep learning (CUDA wheels, see [tool.uv.sources])
+    # text embeddings (CUDA wheels, see [tool.uv.sources]); challenge rule: models must be MIT/Apache-2.0, <= 8B params
     "torch",
-    "torchvision",
     "transformers",
     "sentence-transformers",
     "accelerate",
-    "peft",
-    "timm",
-    # images / text utils
-    "pillow",
-    "opencv-python-headless",
+    # entity resolution: string similarity, transliteration, fast sparse top-k
     "rapidfuzz",
     "regex",
+    "unidecode",
+    "sparse-dot-topn",
     # infra / misc
     "boto3",
     "requests",
@@ -42,9 +39,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Only needed if the problem is image -> text extraction (like 2024). Heavy; install on demand:
-#   uv sync --extra ocr
-ocr = ["easyocr"]
 # SageMaker SDK for launching managed jobs from this laptop (not needed inside SageMaker notebooks).
 aws = ["sagemaker"]
 
@@ -57,7 +51,6 @@ packages = ["src/amlc"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
