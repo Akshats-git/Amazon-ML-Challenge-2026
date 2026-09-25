@@ -30,3 +30,8 @@ experiments_team/
 
 # OS junk
 .DS_Store
+
+# pipeline caches / outputs
+work/
+output/
+upload/
