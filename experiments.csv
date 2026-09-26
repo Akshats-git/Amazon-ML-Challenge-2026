@@ -2,3 +2,7 @@ time,name,cv,lb,notes
 2026-09-25 02:52,dev_smoke,0.98784,,frac=0.02 k=5 min_sim=0.3 w=0.5 thr=0.70 pair_recall=0.9909
 2026-09-25 12:40,dev_eda_redteam_B2_testdensity,0.98303,,frac=0.03 pools; baseline char3 k=5 thr=0.76; train-density B1=0.98632; LOCO drops US -0.0045 India -0.0099; analysis run
 2026-09-25 14:32,dev_ber_v1_stage2,0.98287,,NEW ber pipeline DEV_FRAC=0.1 (full half-country S1 index; 10% queries -> distractor pressure ~10x below test so thresholds/F optimistic); translit dicts 694/30; blocking N/A/C DF_CAP=10k k=10 R@10 US 0.9910 India 0.9841; stage1 OOF F@0.76 0.97577 best single 0.98174@0.40; stage2 F@0.76 0.97747 tuned (T1 0.40 T2 0.70) 0.98287
+2026-09-26 02:28,R04_tier0_full,0.97623,,laptop full scale; stage1 P0 model single T=0.76 scored on P1 OOF; TRAIN_QUERY_FRAC=0.15; R@10 US 0.9909 IN 0.9842; row backfilled from LOG.md
+2026-09-26 04:52,R05_x1_xfeats,0.98645,,+14 xfeats (generator-aware lexicon/edit/number); stages 1+2; tuned T1=0.48 T2=0.76; pooled OOF P0+P1; row backfilled from LOG.md
+2026-09-26 09:09,R06_x2_30pct,0.98705,,TRAIN_QUERY_FRAC=0.30 float16+lgb.Sequence; tuned T1=0.50 T2=0.76; blend x1+x2 OOF 0.98706 at T1=0.52 T2=0.74; row backfilled from LOG.md
+2026-09-26 09:36,R07_blend_fr,0.98706,0.979881,blend x1+x2 + France lexicon imputation (test-only); public LB rank 146; CV-LB gap -0.0072

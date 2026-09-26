@@ -34,4 +34,5 @@ experiments_team/
 # pipeline caches / outputs
 work/
 output/
+output_*/
 upload/

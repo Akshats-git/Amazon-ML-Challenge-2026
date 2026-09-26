@@ -1,9 +1,11 @@
 """Section 7.6 stage-1 pair features (float32, NaN where undefined, country-agnostic).
 
-Per partition: vectorized context features in polars (blocking context, frequencies, per-query flags, OOV),
-string features in forked workers that read the partition's text from shared byte blobs.
-Output: work/feats/{part}/{country}_part-NNN.parquet with q_row, s1_row, y (pools only) + FEATURES.
+Per partition: context features (blocking context, frequencies, per-query flags, OOV) as per-query / per-S1 arrays
+gathered chunk by chunk, string features in forked workers that read the partition's text from shared byte blobs.
+Output: work/feats/{part}/{country}_part-NNN.parquet (FEAT_CHUNK rows each, sorted by query then blk_rank) with
+q_row, s1_row, y (pools only) + FEATURES, float features rounded to 10 mantissa bits.
 """
+import gc
 import math
 import multiprocessing as mp
 import time
@@ -112,8 +114,8 @@ def me_both(qt, st, idf, maxidf):
     bs = dict.fromkeys(ls, 0.0)
     if lq and ls:
         if len(lq) * len(ls) > MAX_SOFT * MAX_SOFT:
-            lq = sorted(lq, key=lambda t: -idf.get(t, maxidf))[:MAX_SOFT]
-            ls = sorted(ls, key=lambda t: -idf.get(t, maxidf))[:MAX_SOFT]
+            lq = sorted(lq, key=lambda t: (-idf.get(t, maxidf), t))[:MAX_SOFT]  # token tie-break: hash-seed independent
+            ls = sorted(ls, key=lambda t: (-idf.get(t, maxidf), t))[:MAX_SOFT]
         memo = _MEMO
         if len(memo) > MEMO_CAP:
             memo.clear()
@@ -260,10 +262,22 @@ def _work(args):
         (rest["num_exact_any"][p], rest["first_num_exact"][p], rest["num_soft_any"][p], rest["num_min_absdiff"][p],
          rest["both_have_nums"][p], rest["num_conflict"][p], rest["longnum_exact"][p]) = _num_feats(qnums[p].split(), snums[p].split())
     out.update(rest)
-    return {f: out[f].astype(np.float32) for f in STR_FEATURES}
+    return {f: round_mantissa(out[f]) for f in STR_FEATURES}
 
 
 # ---------------------------------------------------------------- partition-level
+FEAT_COLS = ["name_core", "name_norm", "name_sq", "legal", "alias_l", "alias_r", "addr_norm", "addr_nums",
+             "alias", "web", "idtag", "nonlatin", "addr_null"]
+
+
+def round_mantissa(a, drop=C.FEAT_DROP_BITS) -> np.ndarray:
+    """Round float32 values to (23 - drop) mantissa bits, NaN/inf untouched: stored features compress ~27% better."""
+    a = np.ascontiguousarray(a, dtype=np.float32)
+    u = a.view(np.uint32)
+    r = (u + np.uint32(1 << (drop - 1))) & np.uint32((0xFFFFFFFF << drop) & 0xFFFFFFFF)
+    return np.where(np.isfinite(a), r, u).view(np.float32)
+
+
 def _idf(series: pl.Series, n_docs: int):
     df = (pl.DataFrame({"t": series.str.split(" ")}).with_row_index("d").explode("t")
           .filter(pl.col("t") != "").unique(["d", "t"]).group_by("t").len())
@@ -271,48 +285,91 @@ def _idf(series: pl.Series, n_docs: int):
     return dict(zip(df["t"].to_list(), idf.tolist())), math.log(1 + n_docs) + 1
 
 
-def context_features(cands: pl.DataFrame, s1p: pl.DataFrame, qp: pl.DataFrame) -> pl.DataFrame:
-    """cands with local keys qi/si; s1p/qp partition frames (row = local index)."""
-    c = cands.sort(["qi", "blk_rank"])
-    qstat = c.group_by("qi").agg(
-        pl.col("blk_score").max().alias("q_top1_score"),
-        pl.col("blk_score").sort(descending=True).get(1, null_on_oob=True).fill_null(0.0).alias("q_second_score"),
-        pl.len().cast(pl.Float32).alias("q_n_cands"))
-    top1 = c.filter(pl.col("blk_rank") == 1).group_by("si").len().rename({"len": "s1_n_top1"})
-    scnt = c.group_by("si").len().rename({"len": "s1_n_cands"})
-    # frequencies within the partition's S1
-    s1 = s1p.select("name_core", "addr_norm").with_row_index("si")
-    name_cnt = s1.group_by("name_core").len().rename({"len": "nf"})
-    addr_cnt = s1.group_by("addr_norm").len().rename({"len": "s1_addr_freq"})
-    s1f = (s1.join(name_cnt, on="name_core", how="left").join(addr_cnt, on="addr_norm", how="left")
-           .select("si", pl.col("nf").alias("s1_name_freq"), "s1_addr_freq"))
-    # per-query flags, OOV share, q_name_freq
-    vocab = pl.DataFrame({"t": s1p["name_norm"].str.split(" ")}).explode("t").unique().with_columns(inv=pl.lit(1))
-    q = qp.select("name_core", "name_norm", "alias", "web", "idtag", "nonlatin", "is_s3", "addr_null").with_row_index("qi")
-    oov = (q.select("qi", pl.col("name_norm").str.split(" ").alias("t")).explode("t").filter(pl.col("t") != "")
-           .join(vocab, on="t", how="left").group_by("qi").agg((1 - pl.col("inv").fill_null(0).mean()).alias("name_oov_frac_q")))
-    qf = (q.join(oov, on="qi", how="left").join(name_cnt.rename({"nf": "q_name_freq"}), on="name_core", how="left")
-          .select("qi", "name_oov_frac_q", pl.col("q_name_freq").fill_null(0),
-                  pl.col("alias").alias("q_alias"), pl.col("web").alias("q_web"), pl.col("idtag").alias("q_idtag"),
-                  pl.col("nonlatin").alias("q_nonlatin"), "is_s3", pl.col("addr_null").alias("q_addr_null")))
-    out = (c.join(qstat, on="qi", how="left").join(top1, on="si", how="left").join(scnt, on="si", how="left")
-           .join(s1f, on="si", how="left").join(qf, on="qi", how="left")
-           .with_columns(blk_gap=pl.col("q_top1_score") - pl.col("blk_score"), s1_n_top1=pl.col("s1_n_top1").fill_null(0)))
-    return out.with_columns(pl.col(f).cast(pl.Float32) for f in CTX_FEATURES)
+def q_true_s1(split="train") -> np.ndarray:
+    """q_row -> its true s1_row, -1 for distractors (GT fact: every query matches at most one S1)."""
+    n_q = sum(pl.scan_parquet(io.norm_path(split, s)).select(pl.len()).collect().item() for s in (2, 3))
+    gt = io.gt_rows()
+    q, s = gt["q_row"].to_numpy(), gt["s1_row"].to_numpy()
+    assert len(np.unique(q)) == len(q), "a query matches two S1"
+    out = np.full(n_q, -1, np.int32)
+    out[q] = s
+    return out
 
 
-def build_partition(part, country, s1n, qn, gt):
+class PairContext:
+    """Stage-1 context features of one partition, kept as per-query / per-S1 arrays (a few hundred MB even for the
+    47M-pair partitions); rows(o, n) gathers them for a slice of pairs. Pairs are sorted by (qi, blk_rank), and
+    blk_rank 1 is the highest blk_score (block_one's output order). Same values as the former polars joins."""
+
+    def __init__(self, qi, si, blk_score, blk_rank, s1p: pl.DataFrame, qp: pl.DataFrame):
+        nq, ns = qp.height, s1p.height
+        self.qi, self.si, self.score, self.rank = qi, si, blk_score, blk_rank
+        new = np.r_[True, qi[1:] != qi[:-1]]
+        assert (np.diff(blk_score)[~new[1:]] <= 0).all(), "blk_score not descending within a query"
+        starts = np.flatnonzero(new)
+        sizes = np.diff(np.r_[starts, len(qi)])
+        qid = qi[starts]
+        second = np.zeros(len(starts), np.float32)
+        m = sizes > 1
+        second[m] = blk_score[starts[m] + 1]
+        self.q_top1, self.q_second, self.q_n = (np.zeros(nq, np.float32) for _ in range(3))
+        self.q_top1[qid], self.q_second[qid], self.q_n[qid] = blk_score[starts], second, sizes
+        self.s_top1 = np.bincount(si[blk_rank == 1], minlength=ns).astype(np.float32)
+        self.s_cands = np.bincount(si, minlength=ns).astype(np.float32)
+        # frequencies within the partition's S1
+        f = s1p.select(nf=pl.len().over("name_core"), af=pl.len().over("addr_norm"))
+        self.s_nf, self.s_af = f["nf"].to_numpy().astype(np.float32), f["af"].to_numpy().astype(np.float32)
+        name_cnt = s1p.group_by("name_core").len()
+        qf = qp.select("name_core").with_row_index("qi").join(name_cnt, on="name_core", how="left").sort("qi")
+        self.q_nf = qf["len"].fill_null(0).to_numpy().astype(np.float32)
+        # share of the query's name_norm tokens absent from the partition's S1 name vocabulary (NaN if no tokens)
+        vocab = pl.DataFrame({"t": s1p["name_norm"].str.split(" ")}).explode("t").unique().with_columns(inv=pl.lit(1))
+        oov = (qp.select(pl.col("name_norm").str.split(" ").alias("t")).with_row_index("qi").explode("t")
+               .filter(pl.col("t") != "").join(vocab, on="t", how="left")
+               .group_by("qi").agg((1 - pl.col("inv").fill_null(0).mean()).alias("oov")))
+        self.q_oov = np.full(nq, np.nan, np.float32)
+        self.q_oov[oov["qi"].to_numpy()] = oov["oov"].to_numpy()
+        self.q_flags = {k: qp[c].cast(pl.Float32).to_numpy() for k, c in (
+            ("q_alias", "alias"), ("q_web", "web"), ("q_idtag", "idtag"), ("q_nonlatin", "nonlatin"),
+            ("is_s3", "is_s3"), ("q_addr_null", "addr_null"))}
+
+    def rows(self, o, n) -> dict:
+        q, s, sc = self.qi[o:o + n], self.si[o:o + n], self.score[o:o + n]
+        top1 = self.q_top1[q]
+        out = {"blk_score": sc, "blk_rank": self.rank[o:o + n].astype(np.float32), "q_top1_score": top1,
+               "blk_gap": top1 - sc, "q_second_score": self.q_second[q], "q_n_cands": self.q_n[q],
+               "s1_n_top1": self.s_top1[s], "s1_n_cands": self.s_cands[s], "name_oov_frac_q": self.q_oov[q],
+               "s1_name_freq": self.s_nf[s], "q_name_freq": self.q_nf[q], "s1_addr_freq": self.s_af[s]}
+        out.update({k: v[q] for k, v in self.q_flags.items()})
+        return {f: out[f] for f in CTX_FEATURES}
+
+
+def load_pairs(part, country, s1_rows, q_rows):
+    """Candidate pairs of a partition as numpy arrays sorted by (qi, blk_rank), plus local keys qi/si."""
+    cands = pl.read_parquet(cand_path(part, country))
+    q_row, s1_row = cands["q_row"].to_numpy(), cands["s1_row"].to_numpy()
+    score, rank = cands["blk_score"].to_numpy(), cands["blk_rank"].to_numpy()
+    del cands
+    qi = np.searchsorted(q_rows, q_row).astype(np.int32)
+    si = np.searchsorted(s1_rows, s1_row).astype(np.int32)
+    assert (q_rows[qi] == q_row).all() and (s1_rows[si] == s1_row).all(), "candidate outside its partition"
+    same = qi[1:] == qi[:-1]
+    if not ((qi[1:] >= qi[:-1]).all() and (rank[1:][same] > rank[:-1][same]).all()):
+        order = np.lexsort((rank, qi))
+        q_row, s1_row, score, rank, qi, si = (a[order] for a in (q_row, s1_row, score, rank, qi, si))
+    return q_row, s1_row, score, rank, qi, si
+
+
+def build_partition(part, country, split, q_true):
     t0 = time.time()
     s1_rows, q_rows = load_partition(part, country)
-    cands = pl.read_parquet(cand_path(part, country))
-    s1p, qp = s1n[s1_rows], qn[q_rows]
-    cands = cands.with_columns(
-        qi=pl.Series(np.searchsorted(q_rows, cands["q_row"].to_numpy()).astype(np.int32)),
-        si=pl.Series(np.searchsorted(s1_rows, cands["s1_row"].to_numpy()).astype(np.int32)))
-    ctx = context_features(cands, s1p, qp)
-    if gt is not None:
-        ctx = ctx.join(gt.with_columns(y=pl.lit(1, pl.Int8)), on=["s1_row", "q_row"], how="left").with_columns(pl.col("y").fill_null(0))
-    ctx = ctx.sort(["qi", "blk_rank"])
+    s1p = io.load_norm(split, "s1", columns=FEAT_COLS)[s1_rows]  # only this partition's rows stay in memory
+    qp = io.load_norm(split, "q", columns=FEAT_COLS)[q_rows]
+    q_row, s1_row, score, rank, qi, si = load_pairs(part, country, s1_rows, q_rows)
+    ctx = PairContext(qi, si, score, rank, s1p, qp)
+    keys = {"q_row": q_row, "s1_row": s1_row}
+    if q_true is not None:
+        keys["y"] = (q_true[q_row] == s1_row).astype(np.int8)
     # partition context for workers
     _G.clear()
     for c in Q_TEXT:
@@ -323,28 +380,32 @@ def build_partition(part, country, s1n, qn, gt):
     _G["q_addr_null"] = qp["addr_null"].to_numpy().astype(np.int8)
     _G["name_idf"], _G["name_maxidf"] = _idf(s1p["name_norm"], s1p.height)
     _G["addr_idf"], _G["addr_maxidf"] = _idf(s1p["addr_norm"], s1p.height)
-    print(f"[feats] {part} {country}: {ctx.height:,} pairs; context done in {time.time() - t0:.1f}s")
-    qi, si = ctx["qi"].to_numpy(), ctx["si"].to_numpy()
+    del s1p, qp
+    gc.collect()
+    print(f"[feats] {part} {country}: {len(qi):,} pairs; context done in {time.time() - t0:.1f}s")
     W = C.WORKER_CHUNK
     tasks = [(qi[o:o + W], si[o:o + W]) for o in range(0, len(qi), W)]
     d = feat_dir(part)
     d.mkdir(parents=True, exist_ok=True)
     for f in feat_files(part, country):
         f.unlink()
-    keep = ["q_row", "s1_row"] + (["y"] if gt is not None else []) + CTX_FEATURES
     buf, done, part_no = [], 0, 0
     t1 = time.time()
     with mp.get_context("fork").Pool(C.N_JOBS) as pool:
         for k, res in enumerate(pool.imap(_work, tasks)):
-            o = k * W
-            buf.append(pl.concat([ctx[o:o + W].select(keep), pl.DataFrame(res)], how="horizontal"))
-            done += len(res[STR_FEATURES[0]])
+            o, n = k * W, len(res[STR_FEATURES[0]])
+            cols = {c: a[o:o + n] for c, a in keys.items()}
+            cols.update({f: round_mantissa(v) for f, v in ctx.rows(o, n).items()})
+            cols.update(res)
+            buf.append(pl.DataFrame(cols))
+            done += n
             if sum(b.height for b in buf) >= C.FEAT_CHUNK or k == len(tasks) - 1:
-                pl.concat(buf).write_parquet(d / f"{country}_part-{part_no:03d}.parquet")
+                pl.concat(buf).write_parquet(d / f"{country}_part-{part_no:03d}.parquet", **C.PARQUET_KW)
                 part_no += 1
                 buf = []
                 el = time.time() - t1
                 print(f"  {done:,}/{len(qi):,} pairs  {done / max(el, 1e-9):,.0f} pairs/s")
+    _G.clear()
     print(f"[feats] {part} {country}: done in {time.time() - t0:.1f}s")
 
 
@@ -353,21 +414,12 @@ def build_features(parts=("P0", "P1", "test")):
         todo = [(p, c) for p, c in partitions(parts) if (p == "test") == (split == "test")]
         if not todo:
             continue
-        cols = ["name_core", "name_norm", "name_sq", "legal", "alias_l", "alias_r", "addr_norm", "addr_nums",
-                "alias", "web", "idtag", "nonlatin", "addr_null"]
-        s1n = io.load_norm(split, "s1", columns=cols)
-        qn = io.load_norm(split, "q", columns=cols)
-        gt = io.gt_rows() if split == "train" else None
+        q_true = q_true_s1() if split == "train" else None
         for part, c in todo:
-            build_partition(part, c, s1n, qn, gt)
+            build_partition(part, c, split, q_true)
+            gc.collect()
 
 
-def load_feats(part, columns=None, filter_q=None) -> pl.DataFrame:
-    """Concatenate all feature chunks of a partition (all countries). filter_q: optional set/array of q_row to keep."""
-    out = []
-    for f in feat_files(part):
-        df = pl.read_parquet(f, columns=columns)
-        if filter_q is not None:
-            df = df.filter(pl.col("q_row").is_in(filter_q))
-        out.append(df)
-    return pl.concat(out)
+def load_cols(part, country, columns) -> pl.DataFrame:
+    """Selected columns of all feature files of (part, country), in file order (the row order of OOF arrays)."""
+    return pl.concat([pl.read_parquet(f, columns=columns) for f in feat_files(part, country)])

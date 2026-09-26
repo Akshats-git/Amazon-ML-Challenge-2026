@@ -43,7 +43,7 @@ def cmd_check2(a):
 
 def cmd_check8(a):
     from ber.checks import step8
-    step8()
+    step8(a.parts)
 
 
 def cmd_norm(a):
@@ -76,19 +76,24 @@ def cmd_feats(a):
     build_features(a.parts)
 
 
+def cmd_xfeats(a):
+    from ber.xfeats import build_xfeats
+    build_xfeats(a.parts)
+
+
 def cmd_train1(a):
     from ber.model import train_stage1
-    train_stage1(tier0=a.tier0, reuse=a.reuse)
+    train_stage1(tier0=a.tier0, reuse=a.reuse, tag=C.TAG)
 
 
 def cmd_train2(a):
     from ber.model import train_stage2
-    train_stage2()
+    train_stage2(tag=C.TAG)
 
 
 def cmd_tune(a):
     from ber.decide import tune
-    tune()
+    tune(C.TAG)
 
 
 def cmd_loco(a):
@@ -98,7 +103,12 @@ def cmd_loco(a):
 
 def cmd_predict(a):
     from ber.submit import predict_and_write
-    predict_and_write(tier0=a.tier0, check_ids=a.check_ids)
+    predict_and_write(tier0=a.tier0, tag=C.TAG, check_ids=a.check_ids)
+
+
+def cmd_blend(a):
+    from ber.submit import blend_and_write
+    blend_and_write(a.tags, check_ids=a.check_ids)
 
 
 def cmd_package(a):
@@ -109,11 +119,13 @@ def cmd_package(a):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ["env", "check1", "check2", "check8", "dicts", "pools", "handmap", "train2", "tune", "loco"]:
+    for name in ["env", "check1", "check2", "dicts", "pools", "handmap", "train2", "tune", "loco"]:
         sub.add_parser(name)
+    s = sub.add_parser("check8")
+    s.add_argument("--parts", nargs="+", default=["P0", "P1"])
     s = sub.add_parser("norm")
     s.add_argument("--splits", nargs="+", default=list(C.SPLITS))
-    for name in ["block", "feats"]:
+    for name in ["block", "feats", "xfeats"]:
         s = sub.add_parser(name)
         s.add_argument("--parts", nargs="+", default=["P0", "P1", "test"], help="partitions: P0 P1 test")
     for name in ["train1", "predict"]:
@@ -121,6 +133,9 @@ def main():
         s.add_argument("--tier0", action="store_true", help="stage-1 only, P0 model, single threshold")
         s.add_argument("--reuse", action="store_true", help="train1: keep an existing model+OOF instead of refitting")
         s.add_argument("--check-ids", action="store_true", help="predict: validator --check-ids (needs a few GB RAM)")
+    s = sub.add_parser("blend")
+    s.add_argument("--tags", nargs="+", required=True, help="runs whose final p2 are averaged")
+    s.add_argument("--check-ids", action="store_true")
     s = sub.add_parser("package")
     s.add_argument("--team", default=os.environ.get("TEAM_NAME", "team"))
     a = p.parse_args()

@@ -76,22 +76,43 @@ def step2():
 
 
 def step8(parts=("P0", "P1"), n_show=20):
-    """Feature sanity: positive rate, positive addr token_set median, constant features, raw-text spot check."""
+    """Feature sanity: positive rate, positive addr token_set median, constant features, raw-text spot check.
+    Streams the feature files (a full pool is ~65M pairs)."""
     from .features import FEATURES, feat_files
 
     ok = True
+    last = None
     for part in parts:
-        df = pl.concat([pl.read_parquet(f) for f in feat_files(part)])
-        pos = df.filter(pl.col("y") == 1)
-        med = pos.filter(pl.col("q_addr_null") == 0)["addr_tset"].median()
-        const = [f for f in FEATURES if df[f].drop_nans().drop_nulls().n_unique() <= 1]
-        print(f"[step8] {part}: pairs {df.height:,}  positive rate {df['y'].mean():.4f}  "
-              f"positives' median addr token_set (non-null) {med:.1f}  constant features {const}")
-        ok &= med >= 90 and not const
+        files = feat_files(part)
+        if not files:
+            print(f"[step8] {part}: no feature files, skipped")
+            continue
+        n = pos = 0
+        med, lo, hi = [], {}, {}
+        for f in files:
+            df = pl.read_parquet(f)
+            n += df.height
+            pos += int(df["y"].sum())
+            med.append(df.filter((pl.col("y") == 1) & (pl.col("q_addr_null") == 0))["addr_tset"].to_numpy())
+            mm = df.select([pl.col(c).fill_nan(None).min().alias(f"{c}|lo") for c in FEATURES]
+                           + [pl.col(c).fill_nan(None).max().alias(f"{c}|hi") for c in FEATURES]).row(0, named=True)
+            for c in FEATURES:
+                for d, k, fn in ((lo, "lo", min), (hi, "hi", max)):
+                    v = mm[f"{c}|{k}"]
+                    if v is not None:
+                        d[c] = v if c not in d else fn(d[c], v)
+            last = df
+        m = float(np.median(np.concatenate(med)))
+        const = [c for c in FEATURES if c not in lo or lo[c] == hi[c]]
+        print(f"[step8] {part}: pairs {n:,}  positive rate {pos / n:.4f}  "
+              f"positives' median addr token_set (non-null) {m:.1f}  constant features {const}")
+        ok &= m >= 90 and not const
+    if last is None:
+        raise SystemExit("no feature files")
     s1 = io.read_source("train", 1)
     q = io.read_queries_raw("train")
     for y in (1, 0):
-        samp = df.filter(pl.col("y") == y).sample(n_show, seed=C_SEED)
+        samp = last.filter(pl.col("y") == y).sample(n_show, seed=C_SEED)
         print(f"--- {n_show} random {'positives' if y else 'negatives'} ({part}): name_tset addr_tset blk_rank")
         for r in samp.iter_rows(named=True):
             a, b = s1.row(r["s1_row"], named=True), q.row(r["q_row"], named=True)

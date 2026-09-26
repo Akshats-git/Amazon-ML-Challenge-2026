@@ -55,7 +55,7 @@ def block_one(s1df: pl.DataFrame, qdf: pl.DataFrame, s1_rows, q_rows, k=C.BLOCK_
     for off in range(0, qdf.height, C.BLOCK_CHUNK):
         sl = qdf.slice(off, C.BLOCK_CHUNK)
         Q = sp.hstack([v.transform(sl[col].to_list()) * np.float32(np.sqrt(w)) for col, v, w in fitted], format="csr", dtype=np.float32)
-        R = sp_matmul_topn(Q, ST, top_n=k, threshold=0.0, sort=True, n_threads=C.N_JOBS).tocsr()
+        R = sp_matmul_topn(Q, ST, top_n=k, threshold=0.0, sort=True, n_threads=C.BLOCK_THREADS).tocsr()
         R.eliminate_zeros()
         counts = np.diff(R.indptr)
         qi = np.repeat(np.arange(R.shape[0]), counts)

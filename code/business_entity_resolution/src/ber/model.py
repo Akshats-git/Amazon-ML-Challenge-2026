@@ -1,11 +1,15 @@
-"""Sections 7.7-7.8 + 10: two-stage LightGBM cross-fit, OOF storage, threshold tuning, LOCO.
+"""Sections 7.7-7.8 + 10: two-stage LightGBM cross-fit, OOF predictions, threshold tuning, LOCO.
 
-Everything is stored per (partition, country); rows of p1/ctx2/p2 files are aligned with the concatenation of
-that partition's feature chunks. Files under OOF_DIR/{tag}/, models under MODEL_DIR/{tag}/.
+Predictions are float32 .npy arrays aligned with the concatenated feature files of (partition, country):
+OOF_DIR/{tag}/{kind}_{part}_{country}.npy (kind p1 / p2). Keys (q_row, s1_row, y, is_s3) are read back from the
+feature files, and the stage-2 context is rebuilt from p1 in memory (context.Ctx2). Models under MODEL_DIR/{tag}/.
+Memory: training matrices are preallocated and filled one feature file at a time (holdout rows last, so train and
+holdout are views), and scoring goes file by file; no step loads a whole 40M-pair partition as a frame.
 LEAKAGE RULE: pool k's stage-2 features only ever use p1 from the model NOT trained on pool k.
 """
 import csv
 import datetime as dt
+import gc
 import json
 import time
 from pathlib import Path
@@ -16,22 +20,27 @@ import polars as pl
 
 from . import config as C
 from . import io
-from .context import CTX2_FEATURES, stage2_context
-from .decide import decide, loss_decomposition, save_thresholds, tune_thresholds, load_thresholds
-from .features import FEATURES, feat_files
-from .metrics import blocking_report
+from .context import CTX2_FEATURES, Ctx2
+from .decide import _in, argmax_rows, assign, decide, load_thresholds, loss_decomposition, save_thresholds, tune_thresholds
+from .features import FEATURES, feat_files, load_cols
 from .pools import countries, load_eval_s1, load_partition
+from .xfeats import LEX_FEATURES, X_FEATURES, xfeat_path
 
-S2_FEATURES = FEATURES + CTX2_FEATURES
+S1_FEATURES = FEATURES + (X_FEATURES if C.USE_XFEATS else [])
+S2_FEATURES = S1_FEATURES + CTX2_FEATURES
 OTHER = {"P0": "P1", "P1": "P0"}
 
 
 def _oof(tag, kind, part, c) -> Path:
-    return C.OOF_DIR / tag / f"{kind}_{part}_{c}.parquet"
+    return C.OOF_DIR / tag / f"{kind}_{part}_{c}.npy"
 
 
 def _model_path(tag, stage, pool) -> Path:
     return C.MODEL_DIR / tag / f"m{stage}_{pool}.txt"
+
+
+def load_pred(tag, kind, part, c) -> np.ndarray:
+    return np.load(_oof(tag, kind, part, c))
 
 
 def log_experiment(name, cv, notes=""):
@@ -46,7 +55,7 @@ def log_experiment(name, cv, notes=""):
 
 # ---------------------------------------------------------------- data loading
 def _train_queries(part, cs):
-    """35% of the pool's queries (seed 42), union over countries."""
+    """TRAIN_QUERY_FRAC of the pool's queries (seed 42), union over countries."""
     rng = np.random.default_rng(C.SEED)
     qs = []
     for c in cs:
@@ -55,44 +64,112 @@ def _train_queries(part, cs):
     return np.concatenate(qs)
 
 
-def load_frame(part, c, stage, tag, q_keep=None, cols=None) -> pl.DataFrame:
-    """q_row, s1_row, [y], is_s3 + stage features for (part, c); optional q_row filter."""
-    extra = None
-    if stage == 2:
-        extra = pl.read_parquet(_oof(tag, "ctx2", part, c))
-    out, off = [], 0
-    for f in feat_files(part, c):
-        df = pl.read_parquet(f)
-        n = df.height
-        if extra is not None:
-            df = pl.concat([df, extra.slice(off, n)], how="horizontal")
-        off += n
-        if q_keep is not None:
-            df = df.filter(pl.col("q_row").is_in(q_keep))
-        if cols is not None:
-            df = df.select([k for k in ["q_row", "s1_row", "y", "is_s3"] if k in df.columns and k not in cols] + cols)
-        out.append(df)
-    if extra is not None:
-        assert off == extra.height, "ctx2 misaligned with feature chunks"
-    return pl.concat(out)
+class _Rows(lgb.Sequence):
+    """float16 rows handed to LightGBM as float64 batches (its Sequence path samples doubles); Dataset construction
+    never sees a full float32 matrix."""
+    batch_size = 65536
+
+    def __init__(self, X):
+        self.X = X
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return np.asarray(self.X[idx], dtype=np.float64)
+
+
+def _mask(rows, size):
+    m = np.zeros(size, bool)
+    m[rows] = True
+    return m
+
+
+def ctx2_for(tag, part, c) -> Ctx2:
+    """Stage-2 context of (part, c) from its stored p1 (OOF for pools, the P0/P1 average for test)."""
+    k = load_cols(part, c, ["q_row", "s1_row", "is_s3"])
+    return Ctx2(k["q_row"].to_numpy(), k["s1_row"].to_numpy(), load_pred(tag, "p1", part, c), k["is_s3"].to_numpy())
+
+
+def _stage1_matrix(f, df, sel=None) -> np.ndarray:
+    """Stage-1 feature matrix of feature file f (df: its frame), plus the xfeats file when USE_XFEATS."""
+    parts = [(df if sel is None else df.filter(pl.Series(sel))).select(FEATURES).to_numpy()]
+    if C.USE_XFEATS:
+        xf = pl.read_parquet(xfeat_path(f), columns=X_FEATURES)
+        assert xf.height == df.height, f"{xfeat_path(f)} not aligned with {f}"
+        parts.append((xf if sel is None else xf.filter(pl.Series(sel))).to_numpy())
+    return np.hstack(parts) if len(parts) > 1 else parts[0]
+
+
+def load_train(pool, cs, stage, tag) -> dict:
+    """Training rows of `pool`: pairs of TRAIN_QUERY_FRAC of its queries, 10% of those queries held out for early
+    stopping (same draw as before: seed 43 over the sorted training queries that have candidates).
+    -> dict(X float32 C-order with the holdout rows last, y, n_tr, cols)."""
+    t0 = time.time()
+    cols = S1_FEATURES if stage == 1 else S2_FEATURES
+    tq = _train_queries(pool, cs)
+    files = {c: feat_files(pool, c) for c in cs}
+    qs = {c: [pl.read_parquet(f, columns=["q_row"])["q_row"].to_numpy() for f in files[c]] for c in cs}
+    size = int(max(q.max() for c in cs for q in qs[c])) + 1
+    in_tq = _mask(tq[tq < size], size)
+    uq = np.unique(np.concatenate([q[in_tq[q]] for c in cs for q in qs[c]]))
+    rng = np.random.default_rng(C.SEED + 1)
+    hold = _mask(uq[rng.random(len(uq)) < C.HOLDOUT_FRAC], size)
+    lex_off = None
+    if C.USE_XFEATS and C.MASK_LEX_FRAC > 0:  # feature dropout of the lexicon block, per query
+        lex_off = _mask(uq[np.random.default_rng(C.SEED + 2).random(len(uq)) < C.MASK_LEX_FRAC], size)
+        lex_cols = [cols.index(f) for f in LEX_FEATURES]
+    n_tr = sum(int((in_tq[q] & ~hold[q]).sum()) for c in cs for q in qs[c])
+    n_va = sum(int((in_tq[q] & hold[q]).sum()) for c in cs for q in qs[c])
+    X = np.empty((n_tr + n_va, len(cols)), np.float16 if C.X16 else np.float32)
+    y = np.empty(n_tr + n_va, np.float32)
+    a, b = 0, n_tr
+    for c in cs:
+        cx = ctx2_for(tag, pool, c) if stage == 2 else None
+        off = 0
+        for f, q in zip(files[c], qs[c]):
+            sel = in_tq[q]
+            if sel.any():
+                df = pl.read_parquet(f, columns=["s1_row", "y"] + FEATURES)
+                parts = [_stage1_matrix(f, df, sel)]
+                if cx is not None:
+                    parts.append(cx.rows(off, q, df["s1_row"].to_numpy(), df["is_s3"].to_numpy())[sel])
+                x = np.hstack(parts) if len(parts) > 1 else parts[0]
+                yy = df["y"].to_numpy()[sel]
+                if lex_off is not None:
+                    x[np.ix_(lex_off[q[sel]], lex_cols)] = np.nan
+                h = hold[q[sel]]
+                k1, k2 = int((~h).sum()), int(h.sum())
+                if C.X16:
+                    x = np.clip(x, -65504, 65504)  # NaN passes through
+                X[a:a + k1], y[a:a + k1] = x[~h], yy[~h]
+                X[b:b + k2], y[b:b + k2] = x[h], yy[h]
+                a, b = a + k1, b + k2
+                del df, parts, x
+            off += len(q)
+        del cx
+        gc.collect()
+    assert a == n_tr and b == n_tr + n_va
+    print(f"[load] {pool} stage {stage}: {n_tr:,} train + {n_va:,} holdout rows x {len(cols)} ({X.nbytes / 2**30:.1f} GB) "
+          f"in {time.time() - t0:.0f}s" + (f"; lexicon blanked for {C.MASK_LEX_FRAC:.0%} of queries" if lex_off is not None else ""))
+    return dict(X=X, y=y, n_tr=n_tr, cols=cols)
 
 
 # ---------------------------------------------------------------- fit / predict
-def fit(df: pl.DataFrame, cols, params, rounds, label) -> lgb.Booster:
+def fit(data: dict, params, rounds, label) -> lgb.Booster:
+    """data from load_train. X is popped from it so it is freed as soon as LightGBM has binned it."""
     t0 = time.time()
-    q = df["q_row"].to_numpy()
-    uq = np.unique(q)
-    rng = np.random.default_rng(C.SEED + 1)
-    h = np.isin(q, uq[rng.random(len(uq)) < C.HOLDOUT_FRAC])
-    y = df["y"].to_numpy()
-    X = df.select(cols).to_numpy().astype(np.float32, copy=False)
-    del df
-    dtr = lgb.Dataset(X[~h], y[~h], feature_name=list(cols), free_raw_data=True)
-    dva = lgb.Dataset(X[h], y[h], reference=dtr)
-    del X
-    b = lgb.train(dict(params, num_threads=C.N_JOBS), dtr, num_boost_round=rounds, valid_sets=[dva], valid_names=["holdout"],
+    X, y, n_tr, cols = data.pop("X"), data.pop("y"), data["n_tr"], data["cols"]
+    p = dict(params, num_threads=C.N_JOBS)
+    wrap = _Rows if X.dtype == np.float16 else (lambda a: a)
+    dtr = lgb.Dataset(wrap(X[:n_tr]), y[:n_tr], feature_name=list(cols), params=p, free_raw_data=True).construct()
+    dva = lgb.Dataset(wrap(X[n_tr:]), y[n_tr:], reference=dtr, params=p, free_raw_data=True).construct()
+    n, pos = len(y), float(y.mean())
+    del X, y
+    gc.collect()
+    b = lgb.train(p, dtr, num_boost_round=rounds, valid_sets=[dva], valid_names=["holdout"],
                   callbacks=[lgb.early_stopping(C.EARLY_STOP, verbose=False), lgb.log_evaluation(250)])
-    print(f"[fit] {label}: rows {len(y):,} (pos {y.mean():.4f}), best_iter {b.best_iteration}, "
+    print(f"[fit] {label}: rows {n:,} (pos {pos:.4f}), best_iter {b.best_iteration}, "
           f"holdout logloss {b.best_score['holdout']['binary_logloss']:.5f}, {time.time() - t0:.0f}s")
     imp = sorted(zip(cols, b.feature_importance("gain")), key=lambda t: -t[1])
     tot = sum(v for _, v in imp) or 1
@@ -100,32 +177,27 @@ def fit(df: pl.DataFrame, cols, params, rounds, label) -> lgb.Booster:
     return b
 
 
-def predict_frame(boosters, df: pl.DataFrame, cols) -> np.ndarray:
-    X = df.select(cols).to_numpy().astype(np.float32, copy=False)
-    return np.mean([b.predict(X, num_iteration=b.best_iteration, num_threads=C.N_JOBS) for b in boosters], axis=0).astype(np.float32)
-
-
-def predict_stage(boosters, part, c, stage, tag, out_kind):
-    cols = FEATURES if stage == 1 else S2_FEATURES
-    ctx = pl.read_parquet(_oof(tag, "ctx2", part, c)) if stage == 2 else None
+def predict_part(boosters, part, c, stage, tag, out_kind) -> np.ndarray:
+    """Mean of `boosters` over every pair of (part, c), file by file -> OOF_DIR/{tag}/{out_kind}_{part}_{c}.npy."""
+    t0 = time.time()
+    cx = ctx2_for(tag, part, c) if stage == 2 else None
     outs, off = [], 0
     for f in feat_files(part, c):
-        df = pl.read_parquet(f)
-        if ctx is not None:
-            df = pl.concat([df, ctx.slice(off, df.height)], how="horizontal")
+        df = pl.read_parquet(f, columns=["q_row", "s1_row"] + FEATURES)
+        x = _stage1_matrix(f, df)
+        if cx is not None:
+            x = np.hstack([x, cx.rows(off, df["q_row"].to_numpy(), df["s1_row"].to_numpy(), df["is_s3"].to_numpy())])
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        outs.append(np.mean([b.predict(x, num_iteration=b.best_iteration, num_threads=C.N_JOBS) for b in boosters],
+                            axis=0).astype(np.float32))
         off += df.height
-        keep = [k for k in ("q_row", "s1_row", "y", "is_s3") if k in df.columns]
-        outs.append(df.select(keep).with_columns(pl.Series(out_kind, predict_frame(boosters, df, cols))))
-    res = pl.concat(outs)
+        del df, x
+    p = np.concatenate(outs)
     path = _oof(tag, out_kind, part, c)
     path.parent.mkdir(parents=True, exist_ok=True)
-    res.write_parquet(path)
-    return res
-
-
-def build_ctx2(part, c, tag):
-    p1 = pl.read_parquet(_oof(tag, "p1", part, c))
-    stage2_context(p1).write_parquet(_oof(tag, "ctx2", part, c))
+    np.save(path, p)
+    print(f"[predict] {tag} {out_kind} {part} {c}: {len(p):,} pairs in {time.time() - t0:.0f}s")
+    return p
 
 
 def load_booster(tag, stage, pool):
@@ -139,73 +211,89 @@ def _save(b, tag, stage, pool):
 
 
 # ---------------------------------------------------------------- evaluation
+def partition_top(tag, kind, part, c):
+    """-> (argmax row per query with ok/has_true, true candidate pairs) for one scored partition."""
+    k = load_cols(part, c, ["q_row", "s1_row", "y"])
+    p = load_pred(tag, kind, part, c)
+    assert len(p) == k.height, f"{kind} {part} {c}: {len(p):,} predictions for {k.height:,} pairs"
+    top = argmax_rows(k["q_row"].to_numpy(), k["s1_row"].to_numpy(), p, k["y"].to_numpy())
+    return top, k.filter(pl.col("y") == 1).select("s1_row", "q_row")
+
+
 def evaluate(tag, kind, pools=("P0", "P1"), cs=None, T=None, label="", decomp=True):
     """Macro F0.5 of the decision policy on OOF predictions over the given pools/countries."""
     cs = cs or countries("train")
     gt = io.gt_rows()
-    frames, truths, unis = [], [], []
+    tops, blocked, truths, unis = [], [], [], []
     for part in pools:
         for c in cs:
-            df = pl.read_parquet(_oof(tag, kind, part, c)).rename({kind: "p"})
-            s1_rows, q_rows = load_partition(part, c)
+            top, bi = partition_top(tag, kind, part, c)
+            _, q_rows = load_partition(part, c)
             uni = load_eval_s1(part, c)
-            truths.append(gt.filter(pl.col("s1_row").is_in(uni) & pl.col("q_row").is_in(q_rows)))
-            frames.append(df.select("q_row", "s1_row", "y", "p"))
+            truths.append(gt.filter(_in(gt["s1_row"], uni) & _in(gt["q_row"], q_rows)))
+            tops.append(top)
+            blocked.append(bi)
             unis.append(uni)
-    df, truth, uni = pl.concat(frames), pl.concat(truths), np.concatenate(unis)
+    top, truth, uni, blocked_in = assign(pl.concat(tops)), pl.concat(truths), np.concatenate(unis), pl.concat(blocked)
+    del tops, blocked
     if T is None:
-        T = load_thresholds()
-    pred = decide(df, *T)
+        T = load_thresholds(tag)
+    pred = decide(top, *T)
     if decomp:
-        out, _ = loss_decomposition(df, pred, truth, uni, label=f"{label} T={T}")
-        return out["F"], df, truth, uni
+        out, _ = loss_decomposition(top, blocked_in, pred, truth, uni, label=f"{label} T={T}")
+        return out["F"], top, truth, uni
     from .metrics import macro_f05
     f = macro_f05(uni, pred["s1_row"].to_numpy(), pred["q_row"].to_numpy(), truth["s1_row"].to_numpy(), truth["q_row"].to_numpy())
     print(f"[eval] {label} T={T}: F={f:.5f}")
-    return f, df, truth, uni
-
-
-# ---------------------------------------------------------------- orchestration
-def train_stage1(tier0=False, tag="main", cs=None, pools=None, reuse=False):
-    cs = cs or countries("train")
-    pools = pools or (("P0",) if tier0 else ("P0", "P1"))
-    for pool in pools:
-        if reuse and _model_path(tag, 1, pool).exists() and all(_oof(tag, "p1", OTHER[pool], c).exists() for c in cs):
-            print(f"[train1] reuse existing {_model_path(tag, 1, pool)} and its OOF predictions")
-            continue
-        tq = _train_queries(pool, cs)
-        df = pl.concat([load_frame(pool, c, 1, tag, q_keep=tq, cols=FEATURES) for c in cs])
-        b = fit(df, FEATURES, C.LGB1, C.LGB1_ROUNDS, f"stage1 {tag} train {pool} {cs}")
-        del df
-        _save(b, tag, 1, pool)
-        for c in cs:
-            predict_stage([b], OTHER[pool], c, 1, tag, "p1")
-    eval_pools = tuple(OTHER[p] for p in pools)
-    best, res = _single_best(tag, "p1", eval_pools, cs)
-    f76, *_ = evaluate(tag, "p1", eval_pools, cs, T=(0.76, 0.76), label=f"stage1 {tag} OOF {eval_pools}")
-    return f76, best
+    return f, top, truth, uni
 
 
 def _single_best(tag, kind, pools, cs):
-    _, df, truth, uni = evaluate(tag, kind, pools, cs, T=(0.76, 0.76), decomp=False, label=f"{kind} {tag}")
-    (fb, tb), res = tune_thresholds(df, truth, uni, single=True)
+    _, top, truth, uni = evaluate(tag, kind, pools, cs, T=(0.76, 0.76), decomp=False, label=f"{kind} {tag}")
+    (fb, tb), res = tune_thresholds(top, truth, uni, single=True)
     print(f"[tune] {tag} {kind} single threshold best F={fb:.5f} at {tb[0]}")
     return (fb, tb), res
 
 
+# ---------------------------------------------------------------- orchestration
+def train_stage1(tier0=False, tag="main", cs=None, pools=None, reuse=False):
+    """Fit stage 1 on each pool (P0 only for tier 0) and score the other pool out of fold. reuse: keep an existing model
+    (its OOF is still produced if missing, e.g. once the other pool's features exist)."""
+    cs = cs or countries("train")
+    pools = pools or (("P0",) if tier0 else ("P0", "P1"))
+    for pool in pools:
+        other = OTHER[pool]
+        if reuse and _model_path(tag, 1, pool).exists():
+            print(f"[train1] reuse {_model_path(tag, 1, pool)}")
+            b = load_booster(tag, 1, pool)
+        else:
+            b = fit(load_train(pool, cs, 1, tag), C.LGB1, C.LGB1_ROUNDS, f"stage1 {tag} train {pool} {cs}")
+            _save(b, tag, 1, pool)
+            for c in cs:
+                _oof(tag, "p1", other, c).unlink(missing_ok=True)  # stale OOF of an older model
+        for c in cs:
+            if not _oof(tag, "p1", other, c).exists() and feat_files(other, c):
+                predict_part([b], other, c, 1, tag, "p1")
+        del b
+        gc.collect()
+    eval_pools = tuple(OTHER[p] for p in pools if all(_oof(tag, "p1", OTHER[p], c).exists() for c in cs))
+    if not eval_pools:
+        print("[train1] no out-of-fold pool has features yet; evaluation skipped")
+        return None
+    best, _ = _single_best(tag, "p1", eval_pools, cs)
+    f76, *_ = evaluate(tag, "p1", eval_pools, cs, T=(0.76, 0.76), label=f"stage1 {tag} OOF {eval_pools}")
+    return f76, best
+
+
 def train_stage2(tag="main", cs=None):
     cs = cs or countries("train")
-    for part in ("P0", "P1"):
-        for c in cs:
-            build_ctx2(part, c, tag)
     for pool in ("P0", "P1"):
-        tq = _train_queries(pool, cs)
-        df = pl.concat([load_frame(pool, c, 2, tag, q_keep=tq, cols=S2_FEATURES) for c in cs])
-        b = fit(df, S2_FEATURES, C.LGB2, C.LGB2_ROUNDS, f"stage2 {tag} train {pool} {cs}")
-        del df
+        b = fit(load_train(pool, cs, 2, tag), C.LGB2, C.LGB2_ROUNDS, f"stage2 {tag} train {pool} {cs}")
         _save(b, tag, 2, pool)
         for c in cs:
-            predict_stage([b], OTHER[pool], c, 2, tag, "p2")
+            predict_part([b], OTHER[pool], c, 2, tag, "p2")
+        del b
+        gc.collect()
     _single_best(tag, "p1", ("P0", "P1"), cs)
     return _single_best(tag, "p2", ("P0", "P1"), cs)
 
@@ -214,11 +302,12 @@ def tune_from_oof(tag="main"):
     cs = countries("train")
     kind = "p2" if _oof(tag, "p2", "P0", cs[0]).exists() else "p1"
     pools = ("P0", "P1") if _oof(tag, kind, "P0", cs[0]).exists() else ("P1",)
-    _, df, truth, uni = evaluate(tag, kind, pools, cs, T=(0.76, 0.76), decomp=False, label=f"{kind} pre-tune")
-    (f1, t1), _ = tune_thresholds(df, truth, uni, single=True)
-    (f2, t2), res = tune_thresholds(df, truth, uni)
-    print(f"[tune] {kind} on {pools}: single-threshold F={f1:.5f} at {t1[0]}; (T1,T2) F={f2:.5f} at {t2}")
-    save_thresholds(*t2, extra=dict(kind=kind, F=f2, F_single=f1, T_single=t1[0]))
+    _, top, truth, uni = evaluate(tag, kind, pools, cs, T=(0.76, 0.76), decomp=False, label=f"{kind} pre-tune")
+    (f1, t1), _ = tune_thresholds(top, truth, uni, single=True)
+    (f2, t2), res = tune_thresholds(top, truth, uni)
+    del top
+    print(f"[tune] {tag} {kind} on {pools}: single-threshold F={f1:.5f} at {t1[0]}; (T1,T2) F={f2:.5f} at {t2}")
+    save_thresholds(*t2, extra=dict(kind=kind, F=f2, F_single=f1, T_single=t1[0]), tag=tag)
     evaluate(tag, kind, pools, cs, T=t2, label=f"{kind} tuned all")
     for c in cs:
         evaluate(tag, kind, pools, [c], T=t2, label=f"{kind} tuned {c}")
@@ -237,15 +326,10 @@ def loco(tag_prefix="loco"):
     for src in cs:
         tag = f"{tag_prefix}_{src}"
         for tgt in cs:
-            if tgt == src:
-                res[(src, tgt)] = evaluate(tag, "p2", ("P0", "P1"), [tgt], T=T, decomp=False, label=f"LOCO train {src} eval {tgt}")[0]
-                continue
-            for pool in ("P0", "P1"):
-                m1 = load_booster(tag, 1, OTHER[pool])
-                predict_stage([m1], pool, tgt, 1, tag, "p1")
-                build_ctx2(pool, tgt, tag)
-                m2 = load_booster(tag, 2, OTHER[pool])
-                predict_stage([m2], pool, tgt, 2, tag, "p2")
+            if tgt != src:
+                for pool in ("P0", "P1"):
+                    predict_part([load_booster(tag, 1, OTHER[pool])], pool, tgt, 1, tag, "p1")
+                    predict_part([load_booster(tag, 2, OTHER[pool])], pool, tgt, 2, tag, "p2")
             res[(src, tgt)] = evaluate(tag, "p2", ("P0", "P1"), [tgt], T=T, decomp=False, label=f"LOCO train {src} eval {tgt}")[0]
     for tgt in cs:
         for src in cs:
