@@ -28,6 +28,14 @@ Run every command from the directory that holds the data. Override paths with en
 | `MASK_LEX_FRAC` | `0.3` | share of training queries whose lexicon features are blanked (feature dropout for unseen countries) |
 | `X16` | `0` | 1 = hold the training matrix as float16 and feed LightGBM through `lgb.Sequence` (half the RAM) |
 | `WRITE_CANDIDATES` | `1` | 0 = skip `candidate_pairs.tsv` (it is identical for every run) |
+| `USE_NFEATS` | `0` | 1 = add the 16 number-relation / number-oracle-lexicon features (`nfeats` step) to both stages |
+| `LGB1_PARAMS`, `LGB2_PARAMS` | `{}` | JSON overrides of the stage-1 / stage-2 LightGBM parameters of a run |
+| `FR_NORM`, `FR_NORM_ADDR`, `FR_NORM_NAME` | `0` | France-only address / name format rules (R08); off in the final |
+| `FR_IMPUTE` | `0` | R07 lexicon imputation for vocabularies unseen in train; off in the final |
+| `FR_RESCUE`, `RESCUE_P`, `RESCUE_JAC` | `0`, 0.90, 0.8 | R09 same-address rescue for countries absent from train; off in the final |
+| `CAPS` | `1` | enforce the generator's per-source caps (<= 5 S2 and <= 6 S3 links per S1, highest p kept) |
+| `BLEND_TAGS_UNSEEN` | unset | `blend`: members used for test countries absent from train (e.g. `x1,x2`), with that blend's own thresholds |
+| `T_UNSEEN` | unset | `T1,T2` for test countries absent from train (default: the OOF-tuned thresholds) |
 
 ## Commands (in order)
 
@@ -44,6 +52,7 @@ $R block                  # Step 6: TF-IDF blocking for P0, P1 and test (top-10 
 $R feats                  # Step 8: 50 stage-1 pair features for P0, P1 and test
 $R check8                 # Step 8 sanity checks
 $R xfeats                 # 14 side features: cross-fitted name-edit lexicon, edit position/frequency, unmatched numbers
+$R nfeats                 # 16 side features: signed number relations (generator shift set) + number-oracle lexicon
 
 export USE_XFEATS=1
 # run x1: 15% of each pool's queries per model
@@ -54,19 +63,29 @@ OUTPUT_DIR=output_x1 $R predict --check-ids
 export TAG=x2 TRAIN_QUERY_FRAC=0.30 X16=1 WRITE_CANDIDATES=0
 $R train1 && $R train2 && $R tune
 OUTPUT_DIR=output_x2 $R predict --check-ids
-# final: mean of the two runs' stage-2 scores, (T1, T2) re-tuned on the averaged OOF
-WRITE_CANDIDATES=1 OUTPUT_DIR=output $R blend --tags x1 x2 --check-ids
+$R blend --tags x1 x2      # x1+x2 blend thresholds (0.52, 0.74); the R06 leaderboard file
+# run x3: + the 16 number features, ALL of each pool's queries (~58.5M pairs per model: ~64 GB RAM, ~2.5 h on 32 vCPU)
+export TAG=x3 USE_NFEATS=1 TRAIN_QUERY_FRAC=1.0 MASK_LEX_FRAC=0.5 X16=0
+$R train1 && $R train2 && $R tune
+OUTPUT_DIR=output_x3 $R predict --check-ids
+# run x4: same data and features, 255 leaves / min_child 200 / feature_fraction 0.6 / lambda_l2 5, seed 43
+export TAG=x4 LGB1_PARAMS='{"num_leaves": 255, "min_child_samples": 200, "feature_fraction": 0.6, "lambda_l2": 5.0, "seed": 43}' \
+       LGB2_PARAMS='{"seed": 43}'
+$R train1 && $R train2 && $R tune
+OUTPUT_DIR=output_x4 $R predict --check-ids
+unset LGB1_PARAMS LGB2_PARAMS
+# final: mean of the x3 and x4 stage-2 scores, (T1, T2) re-tuned on the averaged OOF (0.56, 0.74). France (absent from
+# train) keeps the x1+x2 blend and its thresholds (0.52, 0.74): every France-specific change, including x3's own France
+# predictions, scored lower on the leaderboard
+WRITE_CANDIDATES=1 OUTPUT_DIR=output BLEND_TAGS_UNSEEN=x1,x2 $R blend --tags x3 x4 --check-ids
 ```
 
 Optional: `$R loco` (leave-one-country-out check). The quick path that produced the first leaderboard file (tier 0) is `train1 --tier0` then `predict --tier0`: stage 1 trained on P0 only, single threshold 0.76, 50 base features.
 
 Validation: `predict`/`blend` run the official validator on `matching_results.tsv` with `--check-ids`, and stream-check `candidate_pairs.tsv` with the same rules (one row per S1, S2-/S3- ids, no duplicates, matches ⊆ candidates). The stdlib validator's own candidate check builds Python sets of ~100M ids and needs ~10 GB of RAM.
 
-Runtime on a 6-core / 13 GB laptop: normalization + dictionaries ~20 min, blocking ~1.6 h, features ~45 min, side features ~26 min, each model run ~2–3 h (scoring ~61 min per 99.7M test pairs with two stage-1 and two stage-2 models).
+Runtime on a 6-core / 13 GB laptop: normalization + dictionaries ~20 min, blocking ~1.6 h, features ~45 min, side features ~26 min, runs x1/x2 ~2–3.5 h each (scoring ~61 min per 99.7M test pairs with two stage-1 and two stage-2 models). On a 32 vCPU / 128 GB VM: number features 19 min, run x3 ~2.5 h (stage 1 61 min with two 3,000-round models, stage 2 36 min, test scoring 43 min), run x4 ~2.1 h, blend ~3 min.
 
 ## Method in one paragraph
 
-Names and addresses are normalized the same way for every source and country (unidecode, OCR digit fixes, doubled-letter collapse, legal-form canonicalization, alias/web/id-tag handling, plus name and address transliteration dictionaries learned from train pairs). Blocking runs per country: a sparse TF-IDF over name words, address uni+bigrams and squashed-name char 4-grams (absolute DF cap 10k), with the top 10 S1 records per S2/S3 query by cosine. The candidate file is exactly this set. A stage-1 LightGBM scores each pair from about 50 string, number and blocking features. A stage-2 LightGBM adds context from out-of-fold stage-1 scores (the query's margin, and competition among the queries assigned to the same S1). The unmatched test records are generated from real S1 records (house number shifted, one word from a small per-country list appended), so 14 side features describe the name edit and the number mismatch. The main one is a log-odds lexicon of the words the query adds or drops, learned on the pools (cross-fitted, counted per query, blanked for 30% of training queries so unseen countries such as France fall back on the label-free edit shape). In
-addition, a word that dominates a partition's single appended edits (>= 0.5% of its top-1 pairs, appended last in >= 90%)
-but is not a train generator word gets the median log-odds of the train generator words. This is label-free, and in test
-it fires only for France's generator words (groupe, holding, participations, ...). Each query links to its argmax S1 only. Per S1, the first link is kept if p >= T1 and later links if p >= T2, with thresholds tuned on test-density out-of-fold pools. The final scores average two runs trained on 15% and 30% of the queries.
+Names and addresses are normalized the same way for every source and country (unidecode, OCR digit fixes, doubled-letter collapse, legal-form canonicalization, alias/web/id-tag handling, plus name and address transliteration dictionaries learned from train pairs). Blocking runs per country: a sparse TF-IDF over name words, address uni+bigrams and squashed-name char 4-grams (absolute DF cap 10k), with the top 10 S1 records per S2/S3 query by cosine. The candidate file is exactly this set. A stage-1 LightGBM scores each pair from 80 features, and a stage-2 LightGBM adds context from out-of-fold stage-1 scores (the query's margin, and competition among the queries assigned to the same S1). The unmatched test records are generated from real S1 records: the house number is shifted upward by one of {1, 2, 3, 4, 5, 7, 9, 11, 13, 21} and the name may get a word from a small per-country list appended, a word swapped or the legal form changed. So beyond the 50 string/number/blocking features there are 14 edit features (a cross-fitted log-odds lexicon of the words the query adds or drops, counted per query and blanked for half the training queries; edit position and label-free frequency; unmatched-number offsets) and 16 number features: signed relations of the numbers one address has and the other lacks (shift in the generator set, -1/-2, digit edit, transposition, length difference, same street) and a label-free number-oracle lexicon, computed per partition: the log-odds of a name token appearing in single-upward-shift pairs versus equal-number pairs on the same street, which finds each country's generator words without labels (France's too). Each query links to its argmax S1 only. Per S1, the first link is kept if p >= T1 and later links if p >= T2 (thresholds tuned on test-density out-of-fold pools), at most 5 S2 and 6 S3 links per S1. The final scores average two full-data runs (x3, x4) for the countries seen in training; France keeps the x1+x2 blend, whose predictions scored better there on the leaderboard. France-specific rules (lexicon imputation, normalization rules, a same-address rescue) are implemented behind flags but off: each lowered the leaderboard.

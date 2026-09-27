@@ -176,12 +176,13 @@ def log_odds(pools) -> dict:
     return out
 
 
-def build_xfeats(parts=("P0", "P1", "test")):
+def build_xfeats(parts=("P0", "P1", "test"), only=None):
+    """only: restrict to these countries (e.g. a France-only variant in a parallel WORK_DIR)."""
     for p in {q for part in parts for q in LEX_OF[part]}:
         if not lex_path(p).exists():
             learn_lexicon(p)
     for split in ("train", "test"):
-        todo = [(p, c) for p, c in partitions(parts) if (p == "test") == (split == "test")]
+        todo = [(p, c) for p, c in partitions(parts) if (p == "test") == (split == "test") and (not only or c in only)]
         if not todo:
             continue
         s1_names, q_names = _names(split)
@@ -191,9 +192,10 @@ def build_xfeats(parts=("P0", "P1", "test")):
             t0 = time.time()
             lo = log_odds(LEX_OF[part])
             fq = extra_freq(part, c, s1_names, q_names)
-            if lo_gen is None:
-                lo_gen, train_gen = generator_lo(log_odds(("P0", "P1"))["extra"])
-            lo["extra"] = impute_lexicon(lo["extra"], fq, lo_gen, train_gen, label=f"{part} {c}")
+            if C.FR_IMPUTE:  # R07 (lost on the LB): off by default
+                if lo_gen is None:
+                    lo_gen, train_gen = generator_lo(log_odds(("P0", "P1"))["extra"])
+                lo["extra"] = impute_lexicon(lo["extra"], fq, lo_gen, train_gen, label=f"{part} {c}")
             n = 0
             for f in feat_files(part, c):
                 k = pl.read_parquet(f, columns=["q_row", "s1_row"])
@@ -223,4 +225,4 @@ def build_xfeats(parts=("P0", "P1", "test")):
                 out.parent.mkdir(parents=True, exist_ok=True)
                 pl.DataFrame({x: round_mantissa(cols[x]) for x in X_FEATURES}).write_parquet(out, **C.PARQUET_KW)
                 n += k.height
-            print(f"[xfeats] {part} {c}: {n:,} pairs in {time.time() - t0:.0f}s (lexicon of {LEX_OF[part]})")
+            print(f"[xfeats] {part} {c}: {n:,} pairs in {time.time() - t0:.0f}s (lexicon of {LEX_OF[part]}, impute {C.FR_IMPUTE})")

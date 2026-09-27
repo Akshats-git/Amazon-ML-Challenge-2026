@@ -20,10 +20,16 @@ from .decide import argmax_rows, assign, decide, load_thresholds
 from .features import load_cols
 from .model import _model_path, load_booster, load_pred, predict_part
 from .pools import countries
+from .rescue import rescue_top, unseen_countries
 
 MATCH_HEADER = ("source1_entity_id", "matched_entity_ids")
 CAND_HEADER = ("source1_entity_id", "candidate_entity_ids")
 N_TEST_S1 = 1_732_544
+
+
+def _n_s2():
+    """Number of test S2 rows (q_row >= it is S3) when the per-source caps are on, else None."""
+    return pl.scan_parquet(io.norm_path("test", 2)).select(pl.len()).collect().item() if C.CAPS else None
 
 
 def _key(s1, q):
@@ -39,6 +45,8 @@ def predict_and_write(tier0=False, tag="main", check_ids=False):
     kind = "p2" if has_s2 else "p1"
     print(f"[predict] tag {tag}: stage-1 models {pools1}, stage-2 {'yes' if has_s2 else 'no'}, xfeats {C.USE_XFEATS}, thresholds {T}")
     s1c = pl.read_parquet(io.norm_path("test", 1), columns=["country"])["country"]
+    n_s2, unseen = _n_s2(), unseen_countries()
+    print(f"[predict] rescue {C.FR_RESCUE} for {sorted(unseen)}; thresholds there {C.T_UNSEEN or T}; per-source caps {C.CAPS}")
     preds, cs_, cq_, mon = [], [], [], []
     for c in countries("test"):
         predict_part(m1, "test", c, 1, tag, "p1")
@@ -51,7 +59,10 @@ def predict_and_write(tier0=False, tag="main", check_ids=False):
         assert len(p) == k.height == n_blk, f"{c}: {len(p):,} scores, {k.height:,} feature rows, {n_blk:,} candidates"
         q, s = k["q_row"].to_numpy(), k["s1_row"].to_numpy()
         top = argmax_rows(q, s, p)
-        pred = decide(assign(top), *T)
+        Tc = C.T_UNSEEN if (c in unseen and C.T_UNSEEN) else T
+        if C.FR_RESCUE and c in unseen:
+            top = rescue_top(top, q, s, c, Tc)
+        pred = decide(assign(top), *Tc, n_s2=n_s2)
         ck = np.sort(_key(s, q))  # matches must be scored candidate pairs
         pk = _key(pred["s1_row"], pred["q_row"])
         pos = np.minimum(np.searchsorted(ck, pk), len(ck) - 1)
@@ -100,14 +111,27 @@ def blend_and_write(tags, check_ids=False):
     M.evaluate(name, "p2", T=T, label=f"{name} tuned")
     print(f"[blend] {name}: OOF F={f:.5f} at {T}")
     s1c = pl.read_parquet(io.norm_path("test", 1), columns=["country"])["country"]
+    n_s2, unseen = _n_s2(), unseen_countries()
+    print(f"[blend] rescue {C.FR_RESCUE} for {sorted(unseen)}; thresholds there {C.T_UNSEEN or T}; per-source caps {C.CAPS}")
     preds, cs_, cq_ = [], [], []
     for c in countries("test"):
         k = load_cols("test", c, ["q_row", "s1_row"])
-        p = avg(name, "p2", "test", c)
         q, s = k["q_row"].to_numpy(), k["s1_row"].to_numpy()
-        pred = decide(assign(argmax_rows(q, s, p)), *T)
+        Tc = T
+        if c in unseen and C.BLEND_TAGS_UNSEEN:  # other members (and their own OOF-tuned thresholds) for unseen countries
+            ut = C.BLEND_TAGS_UNSEEN
+            p = np.mean([orig(t, "p2", "test", c) for t in ut], axis=0).astype(np.float32)
+            Tc = load_thresholds("blend-" + "+".join(ut)) if len(ut) > 1 else load_thresholds(ut[0])
+            print(f"[blend] test {c}: members {ut}, thresholds {Tc}")
+        else:
+            p = avg(name, "p2", "test", c)
+        top = argmax_rows(q, s, p)
+        Tc = C.T_UNSEEN if (c in unseen and C.T_UNSEEN) else Tc
+        if C.FR_RESCUE and c in unseen:
+            top = rescue_top(top, q, s, c, Tc)
+        pred = decide(assign(top), *Tc, n_s2=n_s2)
         n_s1 = int((s1c == c).sum())
-        print(f"[blend] test {c}: links/S1 {pred.height / n_s1:.4f}, empty share {1 - pred['s1_row'].n_unique() / n_s1:.4f}")
+        print(f"[blend] test {c} T={Tc}: links/S1 {pred.height / n_s1:.4f}, empty share {1 - pred['s1_row'].n_unique() / n_s1:.4f}")
         preds.append(pred)
         if C.WRITE_CANDIDATES:
             cs_.append(s)

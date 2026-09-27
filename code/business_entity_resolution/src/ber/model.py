@@ -24,9 +24,10 @@ from .context import CTX2_FEATURES, Ctx2
 from .decide import _in, argmax_rows, assign, decide, load_thresholds, loss_decomposition, save_thresholds, tune_thresholds
 from .features import FEATURES, feat_files, load_cols
 from .pools import countries, load_eval_s1, load_partition
+from .nfeats import N_FEATURES, nfeat_path
 from .xfeats import LEX_FEATURES, X_FEATURES, xfeat_path
 
-S1_FEATURES = FEATURES + (X_FEATURES if C.USE_XFEATS else [])
+S1_FEATURES = FEATURES + (X_FEATURES if C.USE_XFEATS else []) + (N_FEATURES if C.USE_NFEATS else [])
 S2_FEATURES = S1_FEATURES + CTX2_FEATURES
 OTHER = {"P0": "P1", "P1": "P0"}
 
@@ -91,14 +92,25 @@ def ctx2_for(tag, part, c) -> Ctx2:
     return Ctx2(k["q_row"].to_numpy(), k["s1_row"].to_numpy(), load_pred(tag, "p1", part, c), k["is_s3"].to_numpy())
 
 
-def _stage1_matrix(f, df, sel=None) -> np.ndarray:
-    """Stage-1 feature matrix of feature file f (df: its frame), plus the xfeats file when USE_XFEATS."""
-    parts = [(df if sel is None else df.filter(pl.Series(sel))).select(FEATURES).to_numpy()]
-    if C.USE_XFEATS:
-        xf = pl.read_parquet(xfeat_path(f), columns=X_FEATURES)
-        assert xf.height == df.height, f"{xfeat_path(f)} not aligned with {f}"
-        parts.append((xf if sel is None else xf.filter(pl.Series(sel))).to_numpy())
-    return np.hstack(parts) if len(parts) > 1 else parts[0]
+def _stage1_matrix(f, df, sel=None, cols=None) -> np.ndarray:
+    """Stage-1 feature matrix of feature file f (df: its frame with the base FEATURES), columns in the order of `cols`
+    (default S1_FEATURES; a booster's own list when scoring): xfeats / nfeats come from their row-aligned side files."""
+    cols = list(cols or S1_FEATURES)
+    frames = [df.select([c for c in cols if c in FEATURES])]
+    for names, path in ((X_FEATURES, xfeat_path(f)), (N_FEATURES, nfeat_path(f))):
+        want = [c for c in cols if c in names]
+        if want:
+            side = pl.read_parquet(path, columns=want)
+            assert side.height == df.height, f"{path} not aligned with {f}"
+            frames.append(side)
+    x = pl.concat(frames, how="horizontal").select(cols)
+    return (x if sel is None else x.filter(pl.Series(sel))).to_numpy()
+
+
+def stage1_cols(booster, stage) -> list:
+    """The stage-1 feature list a booster was trained on (stage 2 appends CTX2_FEATURES)."""
+    names = booster.feature_name()
+    return names[:len(names) - len(CTX2_FEATURES)] if stage == 2 else names
 
 
 def load_train(pool, cs, stage, tag) -> dict:
@@ -117,7 +129,10 @@ def load_train(pool, cs, stage, tag) -> dict:
     hold = _mask(uq[rng.random(len(uq)) < C.HOLDOUT_FRAC], size)
     lex_off = None
     if C.USE_XFEATS and C.MASK_LEX_FRAC > 0:  # feature dropout of the lexicon block, per query
-        lex_off = _mask(uq[np.random.default_rng(C.SEED + 2).random(len(uq)) < C.MASK_LEX_FRAC], size)
+        drop = np.random.default_rng(C.SEED + 2).random(len(uq)) < C.MASK_LEX_FRAC
+        if not C.MASK_HOLDOUT:
+            drop &= ~hold[uq]
+        lex_off = _mask(uq[drop], size)
         lex_cols = [cols.index(f) for f in LEX_FEATURES]
     n_tr = sum(int((in_tq[q] & ~hold[q]).sum()) for c in cs for q in qs[c])
     n_va = sum(int((in_tq[q] & hold[q]).sum()) for c in cs for q in qs[c])
@@ -180,11 +195,13 @@ def fit(data: dict, params, rounds, label) -> lgb.Booster:
 def predict_part(boosters, part, c, stage, tag, out_kind) -> np.ndarray:
     """Mean of `boosters` over every pair of (part, c), file by file -> OOF_DIR/{tag}/{out_kind}_{part}_{c}.npy."""
     t0 = time.time()
+    cols = stage1_cols(boosters[0], stage)
+    assert all(b.feature_name() == boosters[0].feature_name() for b in boosters), "boosters with different features"
     cx = ctx2_for(tag, part, c) if stage == 2 else None
     outs, off = [], 0
     for f in feat_files(part, c):
         df = pl.read_parquet(f, columns=["q_row", "s1_row"] + FEATURES)
-        x = _stage1_matrix(f, df)
+        x = _stage1_matrix(f, df, cols=cols)
         if cx is not None:
             x = np.hstack([x, cx.rows(off, df["q_row"].to_numpy(), df["s1_row"].to_numpy(), df["is_s3"].to_numpy())])
         x = np.ascontiguousarray(x, dtype=np.float32)

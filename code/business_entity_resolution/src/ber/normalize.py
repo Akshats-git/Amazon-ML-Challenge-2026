@@ -60,6 +60,69 @@ HAND_MAPS = {
     "rajasthan": "rj", "punjab": "pb", "haryana": "hr", "bihar": "br", "odisha": "od", "delhi": "dl",
 }
 
+# R08 France-only rules (C.FR_NORM_ADDR / C.FR_NORM_NAME; France has no train rows, so the models, pools and OOF are unaffected). S2/S3
+# abbreviate street types and add the department where S1 spells them out and ends with the region.
+# Targets are the exact tokens S1 uses after the doubled-letter collapse, mined from confident test France top-1 pairs
+# (work/logs/diag_fr_maps.log: q token -> S1 token, purity >= 0.97).
+FR_ADDR_MAP = {
+    "r": "rue", "av": "avenue", "ave": "avenue", "bd": "boulevard", "blvd": "boulevard", "pl": "place",
+    "ch": "chemin", "chem": "chemin", "imp": "impase", "rte": "route", "al": "ale", "crs": "cours", "q": "quai",
+    "res": "residence", "psg": "pasage", "pas": "pasage", "apt": "apartement", "ap": "apartement", "st": "saint",
+    "ste": "sainte",
+}
+FR_ADDR_AFTER_NUM = {"b": "bis", "t": "ter"}  # 12 b -> 12 bis
+FR_NUM_PREFIX = {"no", "ndeg"}  # "No 12", "N° 12" (unidecode: ndeg); S1 writes the bare number
+RE_NDEG = re.compile(r"ndeg(\d+)")
+# regions (S1) and departments (S2/S3, at any position) are dropped on both sides; S1 has nord/gironde in < 200 rows
+FR_REGIONS = [tuple(p.split()) for p in ("hauts de france", "nouvele aquitaine", "pays de la loire", "loire atlantique",
+                                         "pas de calais", "gironde", "nord")]
+FR_NAME_MAP = {
+    "et": "and", "compagnie": "cie", "frs": "freres", "st": "saint", "center": "centre", "cb": "club", "clb": "club",
+    "svc": "service", "farmacie": "pharmacie",
+}
+
+
+def fr_name(toks: list) -> list:
+    """Join runs of >= 2 single letters (s a r l -> sarl), then word map."""
+    out, run = [], []
+    for t in toks + [""]:
+        if len(t) == 1 and t.isalpha():
+            run.append(t)
+            continue
+        if run:
+            out.extend(["".join(run)] if len(run) >= 2 else run)
+            run = []
+        if t:
+            out.append(FR_NAME_MAP.get(t, t))
+    return out
+
+
+def fr_addr(toks: list) -> list:
+    """Drop region/department phrases and the number prefix, expand abbreviations, strip leading zeros."""
+    out, i = [], 0
+    while i < len(toks):
+        for ph in FR_REGIONS:
+            if tuple(toks[i:i + len(ph)]) == ph:
+                i += len(ph)
+                break
+        else:
+            out.append(toks[i])
+            i += 1
+    res = []
+    for j, t in enumerate(out):
+        m = RE_NDEG.fullmatch(t)
+        if m:
+            t = m.group(1)
+        elif t in FR_NUM_PREFIX and j + 1 < len(out) and out[j + 1][:1].isdigit():
+            continue
+        elif t in FR_ADDR_AFTER_NUM and res and res[-1].isdigit():
+            t = FR_ADDR_AFTER_NUM[t]
+        else:
+            t = FR_ADDR_MAP.get(t, t)
+        res.append((t.lstrip("0") or "0") if t.isdigit() else t)
+    return res
+
+
 _NAME_DICT: dict = {}
 _ADDR_DICT: dict = {}
 
@@ -121,19 +184,12 @@ def addr_tokens_pre(raw: str) -> list:
     return [RE_DOUBLE.sub(r"\1", t) for t in s.split()]
 
 
-def norm_record(name: str, addr: str):
-    nonlatin = bool(RE_NONLATIN.search(name) or RE_NONLATIN.search(addr))
-    web = bool(RE_WEB.search(name))
-    alias = bool(RE_ALIAS.search(name))
-    idtag = bool(RE_IDTAG.search(name))
-    name_norm, name_core, name_sq, legal = _name_post(name_tokens_pre(name), nonlatin)
-    alias_l = alias_r = ""
-    if alias:
-        m = RE_ALIAS.search(name)
-        alias_l = _name_post(name_tokens_pre(name[: m.start()]), nonlatin)[1]
-        alias_r = _name_post(name_tokens_pre(name[m.end():]), nonlatin)[1]
+def norm_addr(addr: str, nonlatin: bool, fr: bool):
+    """Address part of norm_record -> (addr_norm, addr_null, addr_nums). fr: France address rules (fr_addr)."""
     addr_null = addr.strip().lower() in ADDR_NULL
     atoks = [] if addr_null else addr_tokens_pre(addr)
+    if fr:
+        atoks = fr_addr(atoks)
     if nonlatin and _ADDR_DICT:
         atoks = " ".join(_ADDR_DICT.get(t, t) for t in atoks).split()
     if C.USE_HAND_MAPS:
@@ -148,8 +204,28 @@ def norm_record(name: str, addr: str):
         i += 1
     addr_norm = " ".join(out)
     nums = [d.lstrip("0") or "0" for d in RE_DIGITS.findall(addr_norm)]
+    return addr_norm, addr_null or not addr_norm, " ".join(nums)
+
+
+def is_nonlatin(name: str, addr: str) -> bool:
+    return bool(RE_NONLATIN.search(name) or RE_NONLATIN.search(addr))
+
+
+def norm_record(name: str, addr: str, country: str = ""):
+    ntoks = (lambda s: fr_name(name_tokens_pre(s))) if C.FR_NORM_NAME and country == "France" else name_tokens_pre
+    nonlatin = is_nonlatin(name, addr)
+    web = bool(RE_WEB.search(name))
+    alias = bool(RE_ALIAS.search(name))
+    idtag = bool(RE_IDTAG.search(name))
+    name_norm, name_core, name_sq, legal = _name_post(ntoks(name), nonlatin)
+    alias_l = alias_r = ""
+    if alias:
+        m = RE_ALIAS.search(name)
+        alias_l = _name_post(ntoks(name[: m.start()]), nonlatin)[1]
+        alias_r = _name_post(ntoks(name[m.end():]), nonlatin)[1]
+    addr_norm, addr_null, addr_nums = norm_addr(addr, nonlatin, C.FR_NORM_ADDR and country == "France")
     return (name_norm, name_core, name_sq, legal, alias_l, alias_r, nonlatin, web, alias, idtag,
-            addr_norm, addr_null or not addr_norm, " ".join(nums))
+            addr_norm, addr_null, addr_nums)
 
 
 COLS = ["name_norm", "name_core", "name_sq", "legal", "alias_l", "alias_r", "nonlatin", "web", "alias", "idtag",
@@ -157,9 +233,9 @@ COLS = ["name_norm", "name_core", "name_sq", "legal", "alias_l", "alias_r", "non
 
 
 def _chunk(args):
-    names, addrs = args
+    names, addrs, countries = args
     load_dicts()
-    rows = [norm_record(n, a) for n, a in zip(names, addrs)]
+    rows = [norm_record(n, a, c) for n, a, c in zip(names, addrs, countries)]
     return list(zip(*rows)) if rows else [[] for _ in COLS]
 
 
@@ -173,17 +249,18 @@ def normalize_frame(df: pl.DataFrame, n_jobs=None, chunk=50_000, slice_rows=1_00
         for off in range(0, df.height, slice_rows):
             sl = df.slice(off, slice_rows)
             names, addrs = sl["business_name"].to_list(), sl["business_address"].to_list()
-            tasks = [(names[i:i + chunk], addrs[i:i + chunk]) for i in range(0, len(names), chunk)]
+            countries = sl["country"].to_list()
+            tasks = [(names[i:i + chunk], addrs[i:i + chunk], countries[i:i + chunk]) for i in range(0, len(names), chunk)]
             res = p.map(_chunk, tasks)
             outs.append(pl.DataFrame({c: [v for r in res for v in r[j]] for j, c in enumerate(COLS)}, schema=SCHEMA))
-            del names, addrs, tasks, res
+            del names, addrs, countries, tasks, res
     return pl.concat([df.select("entity_id", "country"), pl.concat(outs)], how="horizontal")
 
 
 def normalize_all(splits=C.SPLITS):
     C.NORM_DIR.mkdir(parents=True, exist_ok=True)
     nd, ad = load_dicts()
-    print(f"dicts: name {nd} addr {ad} entries; USE_HAND_MAPS={C.USE_HAND_MAPS}")
+    print(f"dicts: name {nd} addr {ad} entries; USE_HAND_MAPS={C.USE_HAND_MAPS} FR_NORM_ADDR={C.FR_NORM_ADDR} FR_NORM_NAME={C.FR_NORM_NAME}")
     for split in splits:
         for src in (1, 2, 3):
             df = io.read_source(split, src)

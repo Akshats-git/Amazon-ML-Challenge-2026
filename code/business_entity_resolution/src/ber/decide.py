@@ -37,10 +37,18 @@ def assign(top: pl.DataFrame) -> pl.DataFrame:
     return top.with_columns(rk=pl.col("p").rank("ordinal", descending=True).over("s1_row"))
 
 
-def decide(top: pl.DataFrame, T1=C.T1_DEFAULT, T2=C.T2_DEFAULT) -> pl.DataFrame:
-    """top from assign(); -> kept links (s1_row, q_row)."""
+def decide(top: pl.DataFrame, T1=C.T1_DEFAULT, T2=C.T2_DEFAULT, n_s2=None) -> pl.DataFrame:
+    """top from assign(); -> kept links (s1_row, q_row). n_s2 (test: number of S2 rows, q_row >= n_s2 is S3): also
+    enforce the generator's per-source caps (<= CAP_S2 S2 and <= CAP_S3 S3 matches per S1), keeping the highest p."""
     keep = pl.when(pl.col("rk") == 1).then(pl.col("p") >= T1).otherwise(pl.col("p") >= T2)
-    return top.filter(keep).select("s1_row", "q_row")
+    out = top.filter(keep)
+    if n_s2 is not None:
+        n = out.height
+        out = (out.with_columns(s3=pl.col("q_row") >= n_s2)
+               .with_columns(r=pl.col("p").rank("ordinal", descending=True).over("s1_row", "s3"))
+               .filter(pl.col("r") <= pl.when(pl.col("s3")).then(C.CAP_S3).otherwise(C.CAP_S2)))
+        print(f"[decide] per-source caps ({C.CAP_S2} S2 / {C.CAP_S3} S3 per S1) dropped {n - out.height:,} of {n:,} links")
+    return out.select("s1_row", "q_row")
 
 
 def _in(values, rows) -> pl.Series:

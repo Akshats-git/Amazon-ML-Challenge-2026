@@ -12,12 +12,20 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
 | R02 | 25 Sep 12:40 | eda_redteam (baseline, test-like pools) | 0.98303 | 0.9898 | – | – | analysis only; not submitted |
 | R03 | 25 Sep 14:32 | ber_v1 dev (new pipeline, DEV_FRAC=0.1) | 0.98287* | R@10 US 0.9910 / IN 0.9841 | – | – | dev only; *optimistic, only comparable with other dev runs |
 | R03c | 26 Sep 00:45 | laptop streaming rewrite: regression on dev + mini | 0.98292* | = R03 | – | – | code check only; outputs byte-identical to R03 path |
-| R04 | 26 Sep 02:28 | ber_v1 FULL scale on laptop: tier-0 (stage 1, P0 model, T=0.76) | 0.97623 (P1 OOF) | R@10 US 0.9909 / IN 0.9842 | pending | pending | `output_tier0/` validated; first LB file |
-| R05 | 26 Sep 04:52 | + 14 edit/number side features (xfeats), stages 1+2, tuned (T1,T2)=(0.48,0.76) | **0.98645** (pooled OOF) | same as R04 | pending | pending | `output_r05/` (predict running) |
-| R06 | 26 Sep 09:09 | R05 with 2× training data (TRAIN_QUERY_FRAC 0.30, float16 + lgb.Sequence), tuned (0.50,0.76); + blend x1+x2 (0.52,0.74) | **0.98705** / blend 0.98706 | same | pending | pending | `output_r06/`, `output_blend/` validated |
+| R04 | 26 Sep 02:28 | ber_v1 FULL scale on laptop: tier-0 (stage 1, P0 model, T=0.76) | 0.97623 (P1 OOF) | R@10 US 0.9909 / IN 0.9842 | not uploaded | – | `output_tier0/` validated; superseded before upload |
+| R05 | 26 Sep 04:52 | + 14 edit/number side features (xfeats), stages 1+2, tuned (T1,T2)=(0.48,0.76) | **0.98645** (pooled OOF) | same as R04 | not uploaded | – | `output_r05/` validated; x1 run, part of the R06 blend |
+| R06 | 26 Sep 09:09 | R05 with 2× training data (TRAIN_QUERY_FRAC 0.30, float16 + lgb.Sequence), tuned (0.50,0.76); + blend x1+x2 (0.52,0.74) | **0.98705** / blend 0.98706 | same | **0.981021** (`output_blend/`) | **301** | `output_blend/` submitted 26 Sep ~17:30; **best LB**; beats R07 by +0.00114 |
 | R07 | 26 Sep 09:36 | R05+R06 blend + France lexicon imputation (test-only, label-free) | **0.98706** (= blend) | same | **0.979881** | **146** | `output_blend_fr/` submitted 26 Sep ~10:00; **CV→LB gap −0.0072** |
+| R08 | 26 Sep 15:15 | R07 + France-only normalization (street types, regions/departments, spaced legal forms, et→and) | 0.98706 (= R07; France not in CV) | same (no re-blocking) | 0.979 (portal shows 3 dp; below R07 0.980) | team rank 299 (best still R07) | `output_r08/` submitted 26 Sep 16:38; **did not beat R07** |
+| R09 | 26 Sep 20:05 | R06 France reproduced exactly (VM) + label-free same-address rescue (unseen countries) + per-source caps | 0.98706 (US/India unchanged; rescue −0.0012 if applied to US/India OOF, so it is off there) | same | **0.976531** | > 500 for this file (team rank still from R06) | `output_r09/` uploaded 26 Sep ~20:10; **−0.0045 vs R06: rescue rejected** |
+| R10a | 26 Sep 20:24 | + 16 number-relation / number-oracle-lexicon features (nfeats); stage-1 parameter A/B on 10% of P0 | holdout log-loss 0.004202 → **0.003854** (−8.3%) | – | – | – | analysis; x2 params kept (255/511 leaves worse) |
+| R10c | 26 Sep 21:31 | France address-only normalization (R08c) on R06 (laptop) | 0.98706 (France not in CV) | same | not submitted | – | extra links fall in the R09-type cells; rejected |
+| R10h | 26 Sep 22:55 | **x3 (+16 nfeats, all queries) for US/India** + R06's France rows (hybrid) | **0.98838** (x3; US 0.98977, India 0.98630) | same | **0.982401** | **320** | `output_r10h/` uploaded 26 Sep ~23:10; **new best LB, +0.00138 vs R06** |
+| R10d | 27 Sep 01:05 | x4 (255-leaf variant, all queries) + blend x3+x4; hybrid `output_hyb34` = x3+x4 US/India + R06 France | **0.98848** (x3+x4; x4 alone 0.98840) | same | **0.982556** | **434** | `output_hyb34/` uploaded 27 Sep (#2 of the day); **new best LB; the final file** |
+| R10x3 | 27 Sep 01:30 | full x3 file: x3 for all countries (= R10h with x3's France rows) | 0.98838 | same | **0.982123** | not reported (team rank from R10h) | `output_x3/` uploaded 27 Sep ~01:30; **−0.00028 vs R10h: x3's France is worse than R06's** |
+| R11 | 27 Sep 01:50 | lexicon-dropout A/B for US/India (10% of P0, unmasked holdout): 0.5 / 0.3 / 0 | log-loss 0.003804 / 0.003813 / 0.003804 | – | – | – | analysis; no difference, no retrain |
 
-**Current best on LB:** **R07 `output_blend_fr/` = 0.979881 public, rank 146** (26 Sep ~10:00 IST; the top-500 cutoff at Sun 00:00 is met). This is the first and only upload so far. Other validated files not uploaded yet: `output_blend/` (0.98706, no France fix), `output_r06/` (0.98705), `output_r05/` (0.98645), `output_tier0/` (0.97623).
+**Current best on LB:** **R10d `output_hyb34/` = 0.982556 public, rank 434** (uploaded 27 Sep, #2 of the day; x3+x4 blend for US/India + R06's x1+x2 France). This is the **final file**. Uploads so far: R07 0.979881, R08 0.979, R06 `output_blend/` 0.981021, R09 0.976531, R10h 0.982401 (rank 320), R10x3 `output_x3/` 0.982123, R10d `output_hyb34/` 0.982556 (rank 434; the rank falls while the score rises because the field keeps improving). Every France change (R07 imputation, R08 normalization, R09 rescue, x3's France predictions) lowered the LB; the US/India model gains transferred (x3: +0.00138 LB for +0.0013 OOF; x3+x4: +0.00016 for +0.0001). 3 uploads left on 27 Sep.
 
 ---
 
@@ -120,7 +128,7 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
   - Label-free monitors per country: links/S1 France 3.289, India 3.288, US 3.325. Empty share 5.9% / 6.1% / 5.9% (train singletons 5.6%). Queries linked 59.5% / 56.5% / 57.8%. France behaves like US/India, so there's no sign of the unseen country being over- or under-linked.
   - Prediction is slow: LightGBM scores ~61k pairs/s for a 1435-tree model on 8 threads, so 27 min for the 99.7M test pairs.
   - **Abandoned:** `lleaves` (LLVM-compiled trees) needed llvmlite ≤ 0.43, and compiling this model used > 6 GB. The OOM killer took the benchmark (not the chain). Uninstalled.
-- **LB (tier-0):** pending: score and rank to be reported after upload.
+- **LB (tier-0):** never uploaded (superseded by R05/R06 before an upload slot was used).
 - **Tier-0 CV (OOF on P1, full test density):**
   - F@0.76 **0.97623**; best single threshold 0.97662 at 0.68. Precision 0.992, recall 0.950.
   - Buckets: n=0 0.9757 (loss 0.0014, FPs on singletons), n=1 0.9239, 2–3 0.9756, 4+ 0.9828.
@@ -176,7 +184,7 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
   - **Decision-policy checks on R05 OOF (no gain, policy is saturated):** per-country (T1, T2) 0.98645 (India own (0.56, 0.76), US own (0.48, 0.78)) = pooled. Expected-F rule best 0.98647. Three thresholds (T3 for rank ≥ 3) best (0.48, 0.70, 0.78) = 0.98645. The pooled grid is flat near the optimum, so the pooled thresholds stand (and suit France).
   - **Error profile (R05 OOF, tuned):** 32.2k of the 39.7k FPs are rank ≥ 3 links. Many are address-less queries matched on the name alone, or same-name S1 in other cities. Below-threshold FNs have p quartiles 0.28 / 0.48 / 0.64: OCR name damage, true matches with a house number off by one, and true matches that append words (LLC, Enterprises) like the generator does.
   - **Test (05:53):** `output_r05/matching_results.tsv` has 1,732,544 rows and **5,811,054 links**, 5.8% empty. Validator `--check-ids` **PASS**. `candidate_pairs.tsv` has 99,695,099 pairs and passes the streaming check (matches ⊆ candidates). Links/S1 France 3.306, India 3.346, US 3.383, empty share 5.8% each. Random-link median raw-name token_set 95.7. Predict took 61 min (two stage-1 + two stage-2 models on 99.7M pairs), peak RSS 5.4 GB.
-- **LB (R05):** pending: to be uploaded; score and rank to be reported.
+- **LB (R05):** never uploaded on its own (its x1 run is part of the R06 blend, which was uploaded).
 - **Takeaways:** the generator-aware side features are the biggest single gain so far (+0.0084 at stage 1). Stage 2 adds +0.0016, and the policy is saturated.
 - **Next:** R06 = R05 with 2× training data (float16 matrix + lgb.Sequence, TRAIN_QUERY_FRAC 0.30), then an R05+R06 blend.
 
@@ -193,7 +201,7 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
     - FP 36,140 (R05 39,652). FN 230,657: below threshold 89,509, blocked out 90,189, lost to another S1 50,959.
     - F_noFP 0.99033, F_allFN_blocked_in 0.99295.
   - **Test (09:05):** `output_r06/matching_results.tsv` has 1,732,544 rows and 5,812,180 links. Validator `--check-ids` **PASS** (candidate file identical to R05's, so not rewritten). Links/S1 France 3.306, India 3.346, US 3.384; empty share 5.8%. Random-link median raw-name token_set 96.3. Test scoring took 83 min (larger models: 1410/1469 + 1215/876 trees).
-- **LB (R06):** pending.
+- **LB (R06):** `output_blend/` (x1+x2 blend, no France changes) submitted 26 Sep ~17:30 IST: **0.981021 public, rank 301** (26 Sep ~19:30; the field keeps improving, so rank fell from 299 despite our better score). This is **+0.00114 over R07** (0.979881), so R07's France lexicon imputation *hurt*: its 22.4k removed France links were mostly true matches. R08 (0.979, built on R07) hurt as well.
 - **Blend `blend --tags x1 x2` (09:09):**
   - OOF: x1 alone 0.98645, x2 alone 0.98705; **mean of the p2s 0.98706 at re-tuned (0.52, 0.74)**, i.e. +0.00001 over x2 alone (noise level).
   - FP 36,833. FN 230,460: 89,533 below threshold, 90,189 blocked out, 50,738 lost to another S1.
@@ -221,6 +229,7 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
   - Consistency check (label-free): assuming the same ~2.3 distractors per S1 in every country, queries/S1 imply true pairs/S1 of US 3.46, India 3.52, France 3.23. US lands on its expected link count; France moves from well above its expectation (3.31) to 3.23.
 - **LB (R07):** **0.979881 public, rank 146** (26 Sep ~10:00 IST; team of 4, IIT Bhilai). The public LB is scored on a subset of test; the private LB uses the rest. **CV→LB gap −0.0072** (OOF 0.98706). That is far beyond sampling noise, so the gap is systematic (see R07b). `output_blend/` vs `output_blend_fr/` would measure the France fix directly.
 - **Takeaways:** France's generator vocabulary was invisible to the train lexicon, and a label-free profile (frequency and position of single appended edits) recovers it without labels or retraining.
+- **Post-LB (26 Sep 17:30):** **wrong.** `output_blend/` (without this fix) scored 0.981021 vs 0.979881, so the appended French words (france, groupe, développement, …) mark *true* variants more often than distractors. The label-free "generator profile" is not evidence of a distractor in France.
 - **Next:** final package = `output_blend_fr/` matching + R05 candidate file; doc; zip.
 
 ## R07b · LB-gap diagnosis (analysis only, no new file) · 26 Sep 10:50
@@ -255,6 +264,24 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
     - one French generic word is swapped (club/union/comite/centre/culturel).
 
     Ruled out: number-shift distractors (France has *fewer* shifted-number links, 0.61%) and leading zeros (already stripped in `addr_nums`: 0.0000 everywhere).
+  - **France distractors use the same perturbation as US/India** (`work/logs/diag_fr.log`). Share of blocking top-1 pairs with a house number shifted by 1–20:
+    - test: France 0.272, India 0.271, US 0.297;
+    - pools: distractor queries 0.51 (India) / 0.38 (US), true queries 0.02.
+
+    So the generator shifts numbers in France too, and the model already rejects those.
+  - **How common each France format issue is** (share of records, S1 vs S2/S3). These are what hurt France:
+
+    | issue | S1 | S2/S3 |
+    |---|---|---|
+    | `r` for `rue` | 0% | **25%** (S1 `rue` 66%, S2/S3 38%) |
+    | bd/av/pl/ch/imp/rte/al | 2.5% | 10% |
+    | `st`/`ste` for saint(e) | 0.1% | 1.8% |
+    | spaced legal forms (`s a`, `s n c`, …) | 0% | 5.2% |
+    | `et` in names (S1 writes `and`) | 0% | 1% |
+
+    Address endings differ as well:
+    - S1 addresses end with the **region**: hauts de france 88k, nouvele aquitaine 74k, pays de la loire 63k (of 259k).
+    - S2 addresses end with a **department**, a region or the city. Departments: gironde 65k, nord 65k, loire atlantique 55k, pas de calais 12k.
 - **LB:** n/a (analysis).
 - **Takeaways:** the gap is mostly France, an unseen country whose address and legal formats the train-fit normalization never saw, plus ~0.001 from test's higher hard-distractor density. OOF stays a valid guide for US/India changes, but France changes can only be judged on the LB. More US/India modelling is worth ≤ 0.0006 (2× data gave +0.0006).
 - **Next:** R08 = France-only normalization:
@@ -263,3 +290,205 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
   - join spaced single-letter legal forms.
 
   Recompute test France features on the **same** candidate pairs (`candidate_pairs.tsv` stays valid), re-score with x1/x2, blend and upload. The pools and OOF are unchanged.
+
+## R08 · France-only normalization (test-only, no retraining) · 26 Sep 15:15
+- **Approach:** France format rules in `ber/normalize.py` (`fr_name`, `fr_addr`), gated on `country == "France"` and `FR_NORM` (env, default 1; `FR_NORM=0` = R07). Mappings were mined from confident France top-1 pairs (blend p ≥ 0.9; `work/logs/diag_fr_maps.log`, q token → S1 token, purity ≥ 0.97):
+  - **Address:**
+    - drop the regions/departments `hauts de france`, `nouvele aquitaine`, `pays de la loire`, `loire atlantique`, `pas de calais`, `gironde`, `nord` at any position, on both sides. Queries often put the department **first**; S1 has nord/gironde in < 200 rows;
+    - drop the number prefixes `no`/`ndeg` (N°); `ndeg12` → `12`;
+    - expand abbreviations to S1's tokens: r→rue, av/ave→avenue, bd/blvd→boulevard, pl→place, ch/chem→chemin, imp→impase, rte→route, al→ale, crs→cours, q→quai, res→residence, psg/pas→pasage, apt/ap→apartement, st→saint, ste→sainte; `b`/`t` after a number → bis/ter;
+    - strip leading zeros from number tokens.
+  - **Name:** join runs of ≥ 2 single letters (`s a r l` → `sarl`), then map et→and, compagnie→cie, frs→freres, st→saint, center→centre, cb/clb→club, svc→service, farmacie→pharmacie.
+  - **Rebuilt, all on the same candidate pairs (no re-blocking):**
+    - `norm --splits test` (74 s). US/India rows verified byte-identical by row hashes; row order and IDs unchanged. France rows changed: S1 259,452 (all), S2 579,565, S3 608,557;
+    - test France features (113 s), then test xfeats (3 min; same 7 France words raised to 9.16);
+    - re-scored x1/x2 stages 1+2 (21 min), then `blend --tags x1 x2` into `output_r08/` (4 min).
+
+    Chain: `work/logs/chain_r08.sh`. R07 France p2 backup: `work/bak_r07/`.
+- **Data:** laptop; test only; models, pools, OOF and thresholds unchanged.
+- **Results:**
+  - **Text agreement on confident France pairs** (816k, `diag_fr_check.log`):
+    - address exact 0.112 → **0.634**, same token set 0.159 → 0.775, mean Jaccard 0.638 → **0.913**;
+    - name exact 0.476 → 0.527, Jaccard 0.761 → 0.797;
+    - the remaining address diffs are generator typos (aenue, jen, sait), as in US/India.
+  - **OOF** 0.98706 at (0.52, 0.74) (unchanged). `output_r08/matching_results.tsv`: 5,797,008 links. Validator `--check-ids` **PASS**; matches ⊆ candidates.
+  - **Links/S1:** France **3.2364** (R07 3.2255), empty share 5.95% (6.03%); India 3.3487 and US 3.3855 unchanged.
+  - **Diff vs R07:** France −10,218 / +13,028 links; US/India identical.
+  - **diag_lb (test France), R07 → R08:**
+    - uncertain share (p 0.1–0.9) 0.0816 → **0.0925** (per S1 0.389 → 0.450);
+    - selfR 0.9634 → 0.9566;
+    - self-est. F 0.98233 → **0.98033**, i.e. *worse* on paper.
+  - **Why the self-estimate fell** (`diag_fr_andfils.log`, `diag_fr_shift_r08.log`):
+    - **`et`→`and` exposes the "& Sons / & Associates" distractor pattern.** In the train lexicon, an extra query token `and` is true in 126 of 111,322 cases; `asociates` 7 of 62k, `sons` 1 of 17.5k. In France, 31k argmax queries have an extra `and` vs their S1, mostly `… et fils` / `… et associés` appended at an identical address. Under R07, `et` was unseen and 23% of these had p ≥ 0.9. Now 0.7% do, and links at p ≥ 0.52 fall from 9,393 to 5,837. That is the intended effect, but the plug-in self-F counts the new doubt as lost recall.
+    - **The other 1.40M queries:** p ≥ 0.52 rises from 846,099 to **857,379** (+11k), and p ≥ 0.9 from 0.576 to 0.582. Uncertainty rises slightly (0.0666 → 0.0725), mostly previously rejected shifted-number or swapped-word distractors that now sit at p 0.1–0.5, below T1.
+- **LB:** submitted 26 Sep 16:38 IST: **0.979** (the submissions page shows 3 decimals; R07 shows 0.980). Our best is still R07 0.979881. Team rank fell 146 → **299** by 17:00, mostly because other teams improved; the top 3 are now 0.990621 / 0.989475 / 0.988842. The portal never showed R08's 6-decimal score.
+- **Post-LB:** R08 did not help and probably hurt slightly (≥ −0.0001 to −0.001 at 3 dp). Suspects, in order:
+  1. `et`→`and` flips ~3.5k "et fils / et associés" links, which may be true variants in France rather than distractors;
+  2. removing the region/department changes address similarity for shifted-number distractors (+25k queries moved from p < 0.1 to 0.1–0.9).
+
+  Isolate with an address-only variant before any further France work.
+- **Takeaways:** normalization closes most of France's format gap: address Jaccard 0.64 → 0.91 on confident pairs. The label-free self-F criterion cannot judge R08, because it rewards the old model's confident errors on "et fils" appends, so the LB has to decide.
+- **Next:** upload R08. If it helps, iterate: map the French generator suffixes to the train vocabulary (fils→sons, asocies→asociates), check remaining name appends (`services`, `cie`), then optionally re-block France.
+
+## R08b · where the remaining loss is (analysis only, no new file) · 26 Sep 17:15
+- **Approach:** label-based OOF analysis of the x1+x2 blend (P0/P1) to decide the next steps after R08 missed. Logs: `work/logs/diag_ties.log`, `diag_fn_samples.log`, `diag_nonlatin.log`, `diag_fn_buckets.log`, `diag_order.log`.
+- **Data:** laptop, existing OOF arrays and norm tables.
+- **Results:**
+  - **OOF loss is recall-bound:** P 0.9965, R 0.9698. FNs: 230k = 90k blocked out (39%), 90k correct argmax below threshold (39%), 51k other S1 won (22%). FPs: 37k.
+  - **Ties are not a factor:** none at p ≥ 0.52.
+  - **Empty query address dominates the errors** (P0):
+    - US: 45% of below-threshold FNs and 38% of FPs, vs 3.2% of TPs; same name + empty address is 26% of FNs and 24% of FPs;
+    - India: 37% of FNs and 18% of FPs.
+
+    These are same-name S1s the model cannot choose between without an address.
+  - **Other FN types:**
+    - name fully replaced by a coined word (`synex`, `umbranex`, `korvantage`) at the same address: ~11% of FNs;
+    - true pairs with a shifted/mistyped house number: nums equal in only 5% of US FNs.
+  - **Translit dict bug:** `work/dicts/addr.json` maps `no`, `4`, `c`, `d`, `urban`, … → `patna` (and `h` → `flat`) for non-Latin records. It does little harm, though: non-Latin India queries have *higher* recall at T1 (0.980) than Latin ones (0.967). Not worth a retrain.
+  - **No ordering leak:** IDs are random, and rank corr(s1_row, q_row) over true pairs is 0.0.
+- **LB:** n/a. Top 3 at 17:00 are 0.9906 / 0.9895 / 0.9888. Even our US/India CV (0.9885 / 0.9849) is below them, so the leaders are ahead on all countries, not only France.
+- **Takeaways:** the big lever is recall for US/India too: blocking misses and empty-address/same-name ambiguity. France alone cannot close a 0.011 gap.
+- **Next:** see the brainstorm in chat (26 Sep 17:15): R08c address-only ablation, a query↔query (S2↔S3) sibling signal for empty-address queries, and larger/extra blocking.
+
+## R08c · research: generator mechanics + France recall deficit (analysis only, no new file) · 26 Sep 19:10
+- **Approach:** label-based OOF analysis (P0/P1) plus label-free test analysis, using the house-number shift as a distractor oracle. Also: web research (entity-resolution state of the art, Foursquare Location Matching winners, other public repos for this challenge). Logs: `work/logs/diag_signed_shift.log`, `diag_shift_errors.log`, `diag_ambiguity.log`, `diag_err_samples.log`, `diag_shift_test.log`, `diag_gen_joint.log`, `diag_num_align.log`, `diag_fr_words.log`, `diag_fr_proxy.log`, `diag_linkrate.log`, `diag_fr_eqother.log`, `diag_fr_swaps.log`, `diag_fr_samestreet.log`, `diag_oof_samestreet.log`, `diag_fr_sibling.log`, `diag_gt_structure.log`.
+- **Data:** laptop; existing OOF/test arrays, norm tables and the three uploaded matching files. (A 7 GB analysis rebooted the laptop at ~18:20; the reruns were memory-lean, one country per process.)
+- **Results:**
+  - **Distractor generator:** copy an S1 record and shift its house number **upward by one of {1, 2, 3, 4, 5, 7, 9, 11, 13, 21}**, each ~equally likely (~42–56k each in US top-1 pairs; +6/+8/+10/+12 only ~1k). Optionally also perturb the name: append a word from a per-country list, swap a word (US: industry words), or change the legal form. **France uses the identical shift set** (+GEN share of top-1 pairs: France 0.274, US 0.264).
+  - **True-match number noise** is symmetric (±1, ±2, ±10, ±20), plus dropped digits and digit edits. So the *sign* separates them, and our features only use |diff|:
+    - US top-1 pairs, P(true): −1/−2 ≈ 0.80, +GEN ≈ 0.025;
+    - numbers equal + "+1 word": **97.8% true**; numbers equal + same name core: 99.9%.
+  - **Where OOF errors sit (argmax level, P0+P1):**
+    - empty query address: US 14.4k FN / 9.6k FP, India 7.8k / 4.1k (≈ 45% of errors; mostly names shared by 2+ S1s, i.e. ambiguous);
+    - +GEN-aligned numbers: 7.8k FP;
+    - −1/−2 and −3…−21 aligned: 6k FN;
+    - digit edits: 3.2k FN / 3.6k FP.
+
+    The number-relation features could reach roughly +0.0005 CV.
+  - **GT structure:** US and India have identical generator statistics: per S1, S2 matches mean 1.67 (max 5), S3 matches mean 1.79 (max 6), 5.58% singletons, 80.5% with both sources. R06 output violates the caps for only 74 S1s.
+  - **France, label-free:**
+    - The France generator words (+GEN pairs) are développement, participations, groupe, holding, international, distribution, france (~27k each).
+    - Of these, **france / groupe / développement are also true-match noise** (≈1.4k each in equal-number pairs, like US "partners"); participations / holding / international / distribution are pure generator words. R07 raised all seven, which removed true links.
+    - A proxy on the uploaded files matches the LB order: R06 → R07 removed 3.7k "equal + 1 word" and 16.2k "equal + edited name" France links (≈ 92–98% true in train); R08 added 280 +GEN links.
+  - **France recall deficit.** For same street/city + identical house number, R06 link rates:
+
+    | name relation | US | India | France |
+    |---|---|---|---|
+    | single word swapped | 93% | 97% | **68%** |
+    | other edits, shared word | 99% | 99% | **77%** |
+    | no shared word | 96% | 95% | **84%** |
+
+    OOF US/India true rates in the same cells are 95–99%, and the model matches them. The unlinked France swaps are organisation words (club↔comité↔amicale↔école↔sportive…) and "& Fils / & Associés". The evidence says they are **true noise, not sibling organisations**:
+    - these words appear at equal numbers at ~25% of their +GEN rate, while pure generator words appear there at ≈ 0;
+    - their exact names repeat across sources only 0.34% of the time (linked true variants: 0.78%);
+    - S1 same-address sibling rates are equal for linked (15.0%) and unlinked (16.6%) pairs.
+
+    Expected France true matches ≈ 3.46/S1 (same generator) ≈ 898k, vs R06's 858.6k links, so France is missing ≈ 40–48k true links (recall ≈ 0.947). This fits France ≈ 0.962 back-solved from the R06 LB.
+  - **Web research:**
+    - other teams' public repos for this challenge report ≤ 0.976 validation (inverted-index blocking, 32-feature LightGBM);
+    - Foursquare Location Matching winners: staged LightGBM (+ XLM-R cross-encoders for 1st place; 7th place used none) with FP-weighted training and graph post-processing;
+    - entity-resolution literature: fine-tuned small LMs (Ditto/AnyMatch) lead on generic benchmarks, but our remaining errors are numeric/structural, and the GTX 1650 cannot score millions of pairs with a cross-encoder in the time left.
+- **LB:** n/a (analysis). The challenge allows 5 uploads/day.
+- **Takeaways:**
+  - France's gap is **recall on same-address variants whose name edits look like US/India distractor edits**; precision on distractors is already excellent (+GEN link rate ≤ 1.6%).
+  - The fix is to trust the number mechanics (equal house number + same street ⇒ not a generator distractor), not new name rules.
+  - For US/India the remaining lever is number-relation features plus more data; the model class (LightGBM) is right.
+- **Next:** the plan is in `docs/handoff_R09.md` (26 Sep 19:30): JarvisLabs 32-vCPU VM (₹1000 budget); tonight R06 France reproduction + label-free France same-address rescue (uploads #1/#2); x3 with number-relation + number-oracle-lexicon features on 50–60% of the data, launched as soon as the features exist (steps chained back-to-back on the VM, no overnight waiting); package by Sun 17:00.
+
+## R09 · R06 France reproduced on the JarvisLabs VM + same-address rescue (unseen countries) · 26 Sep 20:05
+- **Setup (Step A):** JarvisLabs CPU VM `517575` (32 vCPU AMD EPYC 9555, 125 GB RAM, 94 GB disk, IN1, ₹64.28/h; user `ubuntu`, ssh alias `jlber`). Laptop watchdog `work/vm/watchdog.sh` (every 10 min: pause below ₹120 balance; pause after ~40 min idle). Repo + `work/` (16.3 GB) uploaded in ~9 min (~30 MB/s). Env: uv + pinned requirements (+ `libgomp1`), identical versions to the laptop; `env`/`check1`/`check2` PASS. **Reproducibility:** x2 stage-1 re-score of test France file 0 on the VM vs the laptop array: max |diff| 3.0e-8.
+- **Approach:** new flags (all env): `FR_NORM` now defaults to 0 and splits into `FR_NORM_ADDR` / `FR_NORM_NAME`; `FR_IMPUTE` (default 0) gates the R07 lexicon imputation; `FR_RESCUE` (default 1), `CAPS` (default 1). Chain `work/logs/chain_r09a.sh` on the VM: `FR_NORM=0` test norm (US/India rows byte-identical to before), test France feats (33 s), xfeats (no imputation fired), x1/x2 France re-score (5.7 min), blend.
+  - **Rescue** (`ber/rescue.py`), countries absent from train only: on the query's argmax pair, if the S1 has ≥ 1 number, the number multisets are equal and the alphabetic address-token Jaccard is ≥ 0.8 (addresses compared under the R08 France address rules, whatever the features use), and no other candidate S1 of the query also satisfies this (sibling guard), set p = max(p, 0.90). **Caps:** ≤ 5 S2 / ≤ 6 S3 links per S1 (highest p kept).
+- **Data:** VM; test only (models, pools, OOF unchanged).
+- **Results:**
+  - **R06 reproduced exactly:** `FR_RESCUE=0 CAPS=0` blend = `output_blend/` (0 links removed, 0 added; 5,815,887 links; France 3.3091 links/S1). OOF 0.98706 at (0.52, 0.74).
+  - **R09 = R06 + rescue + caps:** 5,866,412 links (+50,684 France; caps removed 347 France / 30 India / 28 US). France argmax same-address rows 635,412 (sibling-guarded 2,462), rescued 632,950, **raised 61,418** (p quartiles 0.011 / 0.126 / 0.579). France links/S1 3.309 → **3.504**, empty share 5.82% → 4.95%. Validator `--check-ids` PASS; candidate check OK (matches ⊆ candidates).
+  - Label-free France cells (`work/diag/fr_cells.py`, R08 address rules): same street + equal numbers, link rate R06 → R09: 1 swap 0.677 → 0.945, other 0.817 → 0.938, +1w 0.990 → 0.999; **all +GEN cells unchanged** (≤ 0.016). Added links: 1 swap 25.1k (club↔comité↔amicale↔école↔sportive… swaps), no shared word 14.3k (coined names), other 11.1k; 2.3k go to S1s that were empty in R06.
+  - **Evidence for** (label-free NOL counts on test France rank-1 pairs, `ber/nfeats.py`): pure generator words appear at equal numbers only ~2% as often as at +GEN shifts (holding 515 vs 26,109), organisation words ~50% as often (club 3,932 vs 7,596), so equal-number org swaps are mostly true noise, not the distractor edit. The R06 → R07 LB drop came from removing links in exactly these cells.
+  - **Evidence against:** France links/S1 3.50 is now above US 3.39 / India 3.35 although France has fewer queries per S1 (5.53 vs 5.76 / 5.82), and its empty share (4.95%) is below the generator's 5.58% singleton rate. On US/India OOF the same rule *lowers* pooled F 0.98706 → 0.98583: there the firing rows the model rejects (p < 0.1) are 99.5% distractors that kept their house number (~0.5–0.8% of firing rows; `work/logs/diag_oof_rescue.log`). So the rule is only right if France's rejections are vocabulary misfires, which the LB must decide.
+- **LB:** **0.976531** (26 Sep ~20:15; this file alone ranks > 500, exact rank not shown; team rank still set by R06). **−0.00449 vs R06.**
+- **Takeaways:**
+  - **The rescue is wrong; the "France recall deficit" of R08c is not real on these pairs.** Back-solving (ΔF ≈ 0.21·ΔR − 0.79·ΔP on France's 15% of S1) gives only ~25% true among the 50.7k added links, about what the model's own p said (raised rows: median p 0.13). So France's model is roughly calibrated on same-address pairs and its rejections were right: France's generator makes many distractors that keep the house number and swap the organisation word or replace the name. The singleton/empty-share and links/S1 monitors were the right warning.
+  - The flags reproduce R06 exactly, and the VM reproduces laptop scores.
+- **Next:** `FR_RESCUE` default is now 0 (the code stays for the record). No more France rules; France changes only through the model (x3's label-free nfeats/NOL) and the normalization variant R08c (address only, no rescue).
+
+## R10a · number-relation + number-oracle-lexicon features (nfeats) and the x3 parameter A/B · 26 Sep 20:24
+- **Approach:** new module `ber/nfeats.py`, 16 label-free features stored row-aligned in `work/nfeats/` (gated by `USE_NFEATS=1`; x1/x2 still load and score unchanged because scoring now takes the column list from each booster's own feature names).
+  - **Number relations (12):** q_only / s_only = numbers one address has and the other lacks; every (q_only, s_only) pair is compared as q − s. `nr_all_equal`, `nr_n_shared`, `nr_gen_pos` (q − s ∈ GEN = {1,2,3,4,5,7,9,11,13,21}), `nr_neg_small` (−1/−2), `nr_neg_gen` (−GEN), `nr_signed_min`, `nr_digit_edit` (Levenshtein 1), `nr_transposed`, `nr_len_diff`, `nr_street_jac` (alphabetic address tokens), `nr_eq_same_street`, `nr_gen_same_street`. Unit-tested on hand pairs (823→844 = +21 GEN; 3984→3982 = −2; 12↔21 transposed and +9; dropped digit = Lev 1, len −1).
+  - **Number-oracle lexicon (4):** per partition (P0, P1, each test country), on blocking rank-1 pairs: D = single +GEN shift on the same street (distractor proxy), T = equal numbers on the same street (true proxy); nol(w) = log((cD+1)/N_D) − log((cT+1)/N_T) per kind (extra/missing name_core token), NaN unless cD + cT ≥ 20; features `nol_extra_max/min`, `nol_missing_max/min`. Replaces the R07 imputation (label-free, no cross-fitting needed).
+- **Data:** VM (32 vCPU); P0, P1, test = 230M pairs in 18.7 min (~200k pairs/s; laptop: test France 14.3M pairs in 53 s).
+- **Results:**
+  - NOL mirrors the supervised lexicon without labels: US top extra eastgate 8.4, riverside 7.8, holdings 7.3, group 7.3; India pharmacy/general/stores/overseas/exports ≈ 7; bottom dba −8, formerly −8, aka −7 everywhere. Test France (R06 norm): international / participations / distribution 4.7, holding 4.6, développement / groupe / france 2.2–2.3; with the R08 address rules (laptop check) organisation words (club, école, amicale, comité …) come out at +1.3–1.4 and fils / "and" / services at −0.4 to −0.7.
+  - **A/B, stage 1, 10% of P0's queries** (5.84M train + 0.65M holdout rows, lexicon dropout 0.3, lr 0.05, early stopping; `work/logs/ab_params.py`):
+
+    | features | params (leaves / min_child / ff / l2) | best_iter | holdout logloss | s/iter |
+    |---|---|---|---|---|
+    | 64 (x2) | 127 / 100 / 0.8 / 1 | 688 | 0.004202 | 0.069 |
+    | **80 (+ nfeats)** | **127 / 100 / 0.8 / 1** | 563 | **0.003854 (−8.3%)** | 0.078 |
+    | 80 | 255 / 100 / 0.8 / 1 | 360 | 0.003883 | 0.111 |
+    | 80 | 255 / 200 / 0.6 / 5 | 421 | 0.003881 | 0.121 |
+    | 80 | 511 / 200 / 0.8 / 5 | 321 | 0.003929 | 0.153 |
+    | 80 | 255 / 50 / 0.6 / 0 | 352 | 0.003942 | 0.113 |
+
+    Top gain with nfeats: blk_rank 0.519, blk_score 0.199, **nr_len_diff 0.066** (3rd), nx_num_unm_affix 0.035, addr_me_q2s 0.029, blk_gap 0.027, **nr_gen_pos 0.020**, **nol_extra_max 0.014**.
+- **Takeaways:** the sign/shift-set number features are worth more than 2× data was (R06: −5.5% logloss); bigger trees do not help at this size. At 0.078 s/iter on 5.8M rows the VM can train on **all** queries.
+- **Next:** x3 = 80 features, x2 params, `TRAIN_QUERY_FRAC=1.0`, `MASK_LEX_FRAC=0.5` (lean on NOL where the supervised lexicon is blind), picked automatically (`work/logs/pick_x3.py`) and launched at 20:24 (`chain_r10b.sh`: train1 → train2 → tune → predict → blends x2+x3, x1+x2+x3).
+
+## R10 diag · France thresholds, label-free (analysis only) · 26 Sep 20:35
+- **Approach:** after R09 showed France's model is roughly calibrated, test whether France wants other thresholds: plug-in expected macro F0.5 per (T1, T2) grid, treating p (x1+x2 blend) as calibrated (`work/diag/plugin_T.py`); on the OOF pools the plug-in optimum is compared with the label-based one.
+- **Results:** plug-in optimum (0.46, 0.74) on all four pools (label-based optima (0.42–0.52, 0.70–0.76); surfaces flat within 2e-5); **test France (0.46, 0.72)**, India (0.46, 0.74), US (0.46, 0.72). Plug-in F: France 0.98268 (vs 0.98262 at the used (0.52, 0.74)), India 0.99016, US 0.99166 (the plug-in level is ~0.007 optimistic on the pools).
+- **Takeaways:** no label-free case for France-specific thresholds; the `T_UNSEEN` probe is dropped (the flag stays).
+
+## R10b · x3 = + nfeats, all queries (VM) · 26 Sep 20:24 → 23:00
+- **Approach:** tag `x3`: 80 stage-1 features (50 base + 14 xfeats + 16 nfeats), x2's LightGBM params (A/B winner), **`TRAIN_QUERY_FRAC=1.0`** (every query of the pool: ~58.5M train + 6.5M holdout pairs per model, float32, 19.4 GB), `MASK_LEX_FRAC=0.5`; stages 1 + 2 cross-fitted, (T1, T2) tuned on pooled OOF; test France = R06 normalization; no rescue; caps on. Chain `work/logs/chain_r10b.sh` (auto-launched by `chain_r10b_auto.sh` from the A/B).
+- **Data:** VM (32 vCPU / 125 GB).
+- **Results so far:**
+  - Stage-1 P0 model: best_iter **3000 (the round cap; still improving, 2500 → 3000: −0.25%)**, holdout log-loss **0.00323** (x2: 0.00394, −18%), 20 min. P1 model: best_iter 2987, 0.00327, 18 min. Top gain: blk_rank 0.52, blk_score 0.20, nr_len_diff / nx_num_unm_absdiff 0.066–0.069, nx_num_unm_affix 0.035, nr_gen_pos 0.020, nol_extra_max 0.014–0.015.
+  - **Stage-1 pooled OOF: F@0.76 0.98673, best single threshold 0.98681 @ 0.70** (x2 stage 1: 0.98515 / 0.98521; **+0.0016**). FP 34,233 (x2: 44,638, −23%); FN 244,754: 90,189 blocked out, 100,233 below threshold, 54,332 other S1 won. F_noFP 0.98944, F_allFN_blocked_in 0.99353. train1 took 60.5 min (scoring 65M pairs with a 3000-tree model ≈ 8.7 min).
+  - Stage 2: best_iter 1987 / 1997 (cap 2000), holdout log-loss **0.00266 / 0.00270** (x2: 0.00312 / 0.00315, −15%), 11 min per fit; train2 took 36 min. OOF p2 F@0.76 0.98816; best single threshold 0.98822 @ 0.70.
+  - **Tuned (T1, T2) = (0.48, 0.74): OOF macro F0.5 = 0.98838** (x1+x2 blend 0.98706: **+0.0013**; gate +0.0003 passed). **US 0.98977** (x2 0.98848), **India 0.98630** (x2 0.98490). Precision 0.99705, recall 0.97193.
+    - Buckets: n=0 0.9853, n=1 0.9637, 2–3 0.9885, 4+ 0.9914.
+    - FP 30,173 (blend 36,833, −18%; 27,949 from queries without a true candidate). FN 214,425 (blend 230,460): 90,189 blocked out, **74,267 below threshold (blend 89,533, −17%)**, 49,969 other S1 won. F_noFP 0.99115, F_allFN_blocked_in 0.99347.
+- **Test (x3, `output_x3/`, 23:00):** 5,831,939 links; links/S1 France 3.3627 (R06 3.3091), India 3.3494, US 3.3878; France empty share 5.56%. Validator PASS. Test scoring took 43 min (100M pairs, 2 × 3000-tree stage-1 + 2 stage-2 models). **France cells (`fr_cells.py`):** links on +GEN-shifted pairs fall in every cell (1 swap 0.0035 → 0.0022, other 0.0075 → 0.0043, same 0.0156 → 0.0132), but equal-number same-street 1 swap 0.677 → 0.729 and other 0.817 → 0.865 (+~11k links, the cells where R09's additions were mostly false), so x3's France is an open LB question.
+- **Blends (OOF, re-tuned):** x2+x3 **0.98818** at (0.46, 0.72); x1+x2+x3 0.98788; both **below x3 alone (0.98838)**, so the weaker runs dilute x3.
+- **Upload #2 = `output_r10h/`** (`work/diag/hybrid.py`: x3's decisions for US/India, R06's France rows unchanged; the pipeline equivalent is `BLEND_TAGS_UNSEEN=x1,x2 blend --tags x3` → `output_hyb3/`). vs R06: US −6,588 / +8,117 links, India −11,953 / +12,573, France identical; 5,818,036 links. Validator `--check-ids` PASS, candidate check OK. It isolates the US/India gain of x3 on the LB (expected ≈ +0.0011 if CV transfers).
+- **LB:** **0.982401, rank 320** (26 Sep ~23:15). **+0.00138 vs R06 (0.981021)**, a little more than the OOF gain predicted (US/India are 85% of S1: +0.0013 × 0.85 ≈ +0.0011), so US/India OOF transfers to the LB.
+- **Takeaways:** the generator-aware number features + all the data are the biggest single step since R05. The public LB rank still slides (301 → 320) because the field improves.
+- **Next (27 Sep, 5 uploads):** full x3 (x3's France rows) to measure x3's France effect; x4 (255 leaves) and its blend with x3 by CV; then choose France by LB and US/India by CV.
+
+## R10c · France address-only normalization "R08c" (laptop, not submitted) · 26 Sep 21:31
+- **Approach:** R06 France with the R08 **address** rules only (`FR_NORM_ADDR=1 FR_NORM_NAME=0`), no imputation, no rescue, caps on; built in the parallel work dir `work_fr8c/` (symlinks to the shared artefacts, so `work/` keeps R06 France). `work/logs/chain_r10c.sh` on the laptop (6 workers, 34 min).
+- **Results:** France addresses changed for 259k S1 / 568k S2 / 598k S3 rows, names and US/India rows unchanged. `output_r10c/`: 5,823,022 links (France +9,871 / −2,678 vs R06; links/S1 3.309 → 3.337, empty share 5.82% → 5.70%). Validator PASS. France cells (`fr_cells.py`): the gains sit in the equal-number same-street **1 swap** (0.677 → 0.705) and **other** (0.817 → 0.835) cells, exactly where R09's added links were ~75% false, and the +GEN cells rise slightly (0.0035 → 0.0039, 0.0075 → 0.0080).
+- **LB:** not submitted.
+- **Takeaways:** better address matching mostly helps France's same-address distractors look like matches; do not use it.
+
+## R10d · x4 (255-leaf variant, all queries) + blends; hybrids; VM paused · 27 Sep 01:05
+- **Approach:** tag `x4` = x3's 80 features and data (`TRAIN_QUERY_FRAC=1.0`, `MASK_LEX_FRAC=0.5`) with the A/B runner-up params: 255 leaves, min_child 200, feature_fraction 0.6, λ2 5, seed 43 (stage 2: x2 params, seed 43). Then OOF-tuned blends. Hybrids (`BLEND_TAGS_UNSEEN=x1,x2`: R06's France members and thresholds): `output_hyb23`, `output_hyb3` (VM), `output_hyb34` (laptop). Chain `work/logs/chain_r10d.sh`.
+- **Data:** VM (32 vCPU), 2 h 7 min for x4 (stage 1 51 min, stage 2 30 min, tune 3 min, test 37 min); hyb34 on the laptop (5 min).
+- **Results:**
+  - x4 stage 1: best_iter **2098 / 1824 (early stopped)**, holdout log-loss 0.00323 / 0.00327 (= x3). Stage 2: best_iter 1997 / 1932, 0.00265 / 0.00270. **OOF 0.98840 at (0.50, 0.74)** (x3 0.98838). FP 30,479, FN 214,246.
+  - **Blends (OOF, re-tuned):** **x3+x4 0.98848 at (0.56, 0.74)** (best; +0.0001 over either alone); x2+x3+x4 0.98843 at (0.50, 0.72). Test links/S1 for x3+x4: France 3.3578, India 3.3488, US 3.3869.
+  - `output_hyb3` (pipeline twin of R10h) = R10h minus 17 capped France links. `output_hyb34` (x3+x4 US/India + R06 France): 5,816,895 links; vs R10h US −1,635 / +1,048, India −3,158 / +2,621, France −17 (caps). Validator PASS, candidate check OK.
+  - All models, stage-2 arrays (x1–x4) and output files mirrored to the laptop (`work/vm/pull.sh`); the laptop's test norm / France artefacts are the R06 versions again (checksums equal to the VM's). `work_fr8c/` deleted (1.5 GB). **VM paused at 01:10 (balance ₹621.84).**
+- **LB:** `output_hyb34/` = **0.982556, rank 434** (27 Sep, #2 of the day, after R10x3 showed x3's France is worse than R06's). **+0.000155 vs R10h** (x3 alone for US/India), in line with the +0.0001 OOF gain of the blend.
+- **Takeaways:** x3+x4 for US/India (by CV) and x1+x2 for France (by LB) is the best combination found; it becomes the final file.
+
+## R10x3 · full x3 upload: x3's France vs R06's France (LB test) · 27 Sep 01:30
+- **Approach:** upload `output_x3/` (x3 for every country, thresholds (0.48, 0.74), caps). Its US/India rows equal R10h's, so the difference to R10h is **only France** (x3: −5,239 / +19,142 links vs R06 France; fewer links on +GEN distractor pairs, ~11k more equal-address links).
+- **LB:** **0.982123** (27 Sep ~01:30; rank not reported, the team rank was set by R10h). **−0.00028 vs R10h.**
+- **Takeaways:** x3's France predictions are worse than R06's (−0.0019 on France's 15% of S1). This agrees with R09: in France, equal house number + same street + a name swap is mostly a distractor, and x3 learned from US/India that such pairs are true. **France keeps the x1+x2 (R06) predictions** (`BLEND_TAGS_UNSEEN=x1,x2`); US/India use the best-CV model x3+x4.
+- **Next:** upload `output_hyb34/` (x3+x4 US/India + R06 France) as the final candidate; package.
+
+## R11 diag · lexicon dropout for US/India (laptop A/B, negative) · 27 Sep 01:50
+- **Approach:** x3/x4 blank the supervised lexicon for 50% of training queries to help France, but France now uses x1+x2. Does the dropout cost US/India? A/B on 10% of P0 with x3's features and params, **holdout rows never masked** (as at test; new opt-in `MASK_HOLDOUT=0`), dropout 0.5 / 0.3 / 0 (`work/logs/ab_mask.sh`). P0 nfeats regenerated on the laptop for it (6.5 min, NOL identical to the VM's).
+- **Results:** holdout log-loss 0.003804 (0.5) / 0.003813 (0.3) / 0.003804 (0): no difference (NOL carries the same signal without labels).
+- **Takeaways:** no x5 retrain. Also, the paused VM could not be resumed at 01:35 ("CPUs not available", IN1 has no 32/16-vCPU capacity; IN2 has), which does not matter now: the laptop holds every artefact of the final.
+
+## R12 · final choice, reproducibility and package dry run · 27 Sep 02:00 (LB 09:15)
+- **Final file: `output_hyb34/matching_results.tsv`** = x3+x4 stage-2 average for US and India (thresholds (0.56, 0.74), tuned on the pooled OOF), the x1+x2 average for France (its own thresholds (0.52, 0.74)), per-source caps on, no France rules. **OOF 0.98848; public LB 0.982556, rank 434.** sha256 `74974c99…`.
+- **Why:** US/India questions decided by CV (x3+x4 0.98848 > x4 0.98840 ≈ x3 0.98838 > x2+x3+x4 0.98843 > x2+x3 0.98818). France decided by the LB (R06's x1+x2 France beat R07/R08/R09 and x3's France).
+- **Reproduction:** the code defaults (`FR_NORM=0`, `FR_IMPUTE=0`, `FR_RESCUE=0`, `CAPS=1`, `MASK_HOLDOUT=1`) plus the documented runs reproduce it: `README.md` / `run_all.sh` now build x1, x2, the x1+x2 blend, x3 (`USE_NFEATS=1 TRAIN_QUERY_FRAC=1.0 MASK_LEX_FRAC=0.5`), x4 (+ `LGB1_PARAMS`/`LGB2_PARAMS`) and the final `BLEND_TAGS_UNSEEN=x1,x2 blend --tags x3 x4`, which is exactly the command that produced `output_hyb34` on the laptop.
+- **Package dry run (01:56):** `final_package.sh` with CHOSEN=output_hyb34 → validator `--check-ids` PASS, candidate check OK (1,732,544 rows, 99,695,099 ids, matches within candidates), zip 559.6 MB with `output/` (both TSVs), `code/business_entity_resolution/` (all modules incl. `nfeats.py`, `rescue.py`), `Documentation_template.md`; the zipped matching file is byte-identical to `output_hyb34`. Dry-run zip deleted. The script now refuses to package while a placeholder remains (only the doc's final-LB number is left).
+- **Docs:** `docs/Documentation_BER.md` rewritten for the final (team SteinsGate; generator mechanics with the GEN shift set; nfeats + NOL; results table with LB column; "what did not help" incl. the R07/R08/R09 France rules and x3's France). `README.md` (new flags, nfeats step, x3/x4 runs, final blend, method paragraph) and `run_all.sh` updated.
+- **VM:** paused since 01:10 (balance ₹621.84; storage only). A resume at 01:35 failed for lack of 32-vCPU capacity in IN1; nothing further needs it. All artefacts of the final are on the laptop (models x1–x4, stage-2 arrays, test nfeats, R06-France test artefacts; checksums verified).
+- **Pending:** fill the final LB into the doc, build `SteinsGate_submission.zip` (`CHOSEN=output_hyb34 TEAM=SteinsGate bash work/logs/final_package.sh`), user uploads the zip + final matching file; destroy the VM only after the user approves.

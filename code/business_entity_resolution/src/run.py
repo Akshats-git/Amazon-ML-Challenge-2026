@@ -2,7 +2,8 @@
 
     python code/business_entity_resolution/src/run.py <command> [options]
 
-Commands (in build order): env check1 check2 norm dicts pools block handmap feats train1 train2 tune loco predict package
+Commands (in build order): env check1 check2 norm dicts pools block handmap feats xfeats nfeats train1 train2 tune loco
+predict blend package
 """
 import argparse
 import os
@@ -78,7 +79,12 @@ def cmd_feats(a):
 
 def cmd_xfeats(a):
     from ber.xfeats import build_xfeats
-    build_xfeats(a.parts)
+    build_xfeats(a.parts, a.countries)
+
+
+def cmd_nfeats(a):
+    from ber.nfeats import build_nfeats
+    build_nfeats(a.parts, a.countries)
 
 
 def cmd_train1(a):
@@ -125,9 +131,10 @@ def main():
     s.add_argument("--parts", nargs="+", default=["P0", "P1"])
     s = sub.add_parser("norm")
     s.add_argument("--splits", nargs="+", default=list(C.SPLITS))
-    for name in ["block", "feats", "xfeats"]:
+    for name in ["block", "feats", "xfeats", "nfeats"]:
         s = sub.add_parser(name)
         s.add_argument("--parts", nargs="+", default=["P0", "P1", "test"], help="partitions: P0 P1 test")
+        s.add_argument("--countries", nargs="+", default=None, help="xfeats/nfeats: only these countries")
     for name in ["train1", "predict"]:
         s = sub.add_parser(name)
         s.add_argument("--tier0", action="store_true", help="stage-1 only, P0 model, single threshold")

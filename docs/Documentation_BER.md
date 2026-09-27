@@ -1,6 +1,6 @@
 # ML Challenge 2026: Business Entity Resolution Solution
 
-**Team Name:** ⟨TBD⟩  
+**Team Name:** SteinsGate  
 **Team Members:** Lakshay Gupta, Akshat Gupta, Keshav Mishra, Akansh Tyagi (IIT Bhilai)  
 **Submission Date:** 27 September 2026
 
@@ -8,14 +8,18 @@
 
 ## 1. Executive Summary
 
-We resolve every Source-2/3 record ("query") to at most one Source-1 entity with a four-part pipeline:
+We link every Source-2/3 record ("query") to at most one Source-1 entity with four parts:
+1. a country-agnostic normalizer (transliteration dictionaries learned from train);
+2. per-country sparse TF-IDF blocking (top-10 S1 per query);
+3. a two-stage LightGBM scorer;
+4. a per-entity decision policy (argmax per query; per S1, first link at p ≥ T1 and later links at p ≥ T2).
 
-1. **Normalization.** One country-agnostic normalizer is used for every source. Its transliteration dictionaries are learned from the training ground truth.
-2. **Blocking.** Sparse TF-IDF blocking runs per country and returns the top-10 S1 records per query.
-3. **Scoring.** A 50-feature LightGBM pair scorer is followed by a second LightGBM that adds out-of-fold *competition context*: how the query's other candidates scored, and which other queries already point at the same S1.
-4. **Decision.** Each query links to its argmax S1 only. Per S1, the first link is kept if p ≥ T1 and later links if p ≥ T2.
+The largest gains came from reverse-engineering how the unmatched records were generated. A distractor is a copy of a real S1 record whose house number is shifted **upward by one of {1, 2, 3, 4, 5, 7, 9, 11, 13, 21}** and whose name is optionally edited. Features that see this mechanism took out-of-fold macro F0.5 from 0.976 to **0.988**:
+- a name-edit lexicon;
+- signed number relations;
+- a label-free "number-oracle" lexicon, learned per country without labels.
 
-The key design choice is the validation set. We rebuilt train into two disjoint *test-density* pools (half of each country's S1 plus **all** unmatched records). Thresholds and every reported score therefore come from out-of-fold predictions that face the same distractor pressure as the test set, which has 2.3 distractors per S1 against 1.2 in train. France, which is absent from training, is handled by the same country-agnostic features.
+All thresholds and scores come from cross-fitted pools rebuilt at test distractor density. France has no training data, so every France-specific choice was judged on the public leaderboard. It preferred the earlier, simpler models' France predictions, so the final file uses the new x3+x4 blend for US and India and the x1+x2 blend for France.
 
 ---
 
@@ -23,188 +27,141 @@ The key design choice is the validation set. We rebuilt train into two disjoint 
 
 ### 2.1 Problem Analysis
 
-Facts measured on train that shaped the design:
-
-- **One-to-one structure:** every S2/S3 record matches **at most one** S1 (0 violations), and no true pair crosses countries. Per-query argmax is therefore safe, and blocking can run per country.
-- **Singletons and distractors:** 5.59% of S1 have no match, and they score 1.0 only if left empty. Train has 1.22 unmatched queries per S1. In test we estimate ~2.3 per S1: query volume and noise-marker counts give the same figure. Precision on unmatched queries is the main lever: in a small-scale study, 84% of false positives came from queries with no true candidate.
-- **Noise patterns:**
-  - OCR digit/letter swaps (0↔o, 1↔l, 5↔s) and doubled/dropped letters.
-  - Legal-form variants (LLC/L.L.C., Pvt/Private, Ltd/Limited, SARL/SAS…).
-  - DBA/"trading as" aliases, web handles (`.com`, `www.`, `@`) and ID tags (`(ID: 123)`, `#1234`).
-  - Punctuation and case differences, `&`/"and", token reordering, address components in permuted order.
-  - Abbreviations (Street/St, Nagar/Ngr), missing addresses (`N/A`, empty).
-  - **Non-Latin script** records, mainly Indian: some queries are fully transliterated.
-- **France** appears only in test, so no feature, dictionary or threshold may depend on the country label.
-- **How the unmatched records are made (found at full scale):** the unmatched queries are generated hard negatives. The generator copies a real S1 record and:
-  - shifts the house number by a few units (524 → 537, 3931 → 3934), sometimes keeping the unit number;
-  - appends one word from a small per-country list: US *partners, holdings, group* plus ~20 location words (*north, downtown, westgate, …*); India *public, enterprises, industries, ventures, exports, overseas, infratech*; France *groupe, holding, participations, développement, …*;
-  - or changes the legal form.
-
-  The street and city are unchanged, so these records get a high blocking score (90th-percentile cosine 0.74). In pairs where the query name has exactly one extra token, *holdings* and *group* occur ~59,000 times in non-matching pairs and never in true ones, while *the* (29.8k true vs 5.5k) is typical true-match noise. String similarity cannot separate "X Holdings" from "The X".
+- **Structure (train GT):**
+  - Every S2/S3 record matches at most one S1, and no pair crosses countries. So per-query argmax is safe and blocking runs per country.
+  - Per S1: 1.67 S2 matches on average (max 5) and 1.79 S3 matches (max 6); 5.58% of S1 are singletons.
+  - Train has 1.2 unmatched queries per S1. Test has ~2.3: query volume and noise-marker counts give the same figure.
+- **True-match noise:**
+  - OCR digit/letter swaps, doubled/dropped letters, legal-form variants, DBA aliases, web handles, ID tags.
+  - Abbreviations, missing addresses, non-Latin (mainly Indian) scripts.
+  - Symmetric house-number noise: ±1, ±2, ±10, ±20, dropped digits, digit edits.
+  - Occasionally the whole name is replaced by a coined word at the same address.
+- **Distractor generator (measured at full scale):**
+  - Copy an S1 record and shift its house number *upward* by a value in GEN = {1, 2, 3, 4, 5, 7, 9, 11, 13, 21} (each ≈ equally likely).
+  - Optionally also: append a word from a small per-country list (US *holdings, group, partners, downtown, eastgate…*; India *enterprises, exports, overseas, ventures…*; France *holding, participations, international, distribution, groupe, développement, france*), swap a word, or change the legal form.
+  - The street and city stay the same, so these records get high blocking scores. The **sign** of the number difference separates them: in US top-1 pairs, P(true | q − s ∈ {−1, −2}) ≈ 0.80 but P(true | q − s ∈ GEN) ≈ 0.025.
+  - Our first number features only saw |q − s|.
+- **France appears only in test.** Nothing may depend on the country label, and every France-specific choice can only be judged on the leaderboard (see §5).
 
 ### 2.2 Solution Strategy
 
 **Approach Type:** Blocking + two-stage gradient-boosted classifier + per-entity decision policy.  
 **Core Innovation:**
-- **Edit features aimed at the generator:** a cross-fitted log-odds lexicon of the words the query name adds or drops relative to the S1 name, whether the extra word is appended (generator) or prepended (noise), a label-free frequency of that word, and house-number shift features. Together they cut stage-1 log-loss by about 29% at equal data.
-
-- **Test-density out-of-fold pools.** Thresholds are tuned under realistic distractor pressure.
-- **Stage-2 competition context.** The second model sees each query's runner-up margin and the other queries competing for the same S1. That is what lets it reject look-alike distractors that a pairwise model cannot tell apart.
-- **Learned transliteration dictionaries.** They are learned from the training ground truth, not hand-made.
-
-Validation pools: S1 of each country are split into halves by `md5(entity_id) mod 2`. Pool P_k^c holds half k's S1, the queries matched to them, and all unmatched queries of country c. That gives about 2.4 unmatched queries per indexed S1, close to test. Blocking, features and models are built per pool. Stage 1 and stage 2 are cross-fitted P0 ↔ P1, so every pool prediction is out-of-fold.
+- **Generator-aware features:**
+  - *14 edit features:* a cross-fitted log-odds lexicon of the words the query adds or drops, the edit position, and unmatched-number offsets.
+  - *16 number features:* signed number relations against the GEN shift set, plus the label-free number-oracle lexicon (NOL).
+- **Test-density out-of-fold pools.** The S1 of each country are split in halves by `md5(entity_id) mod 2`. Pool P_k^c holds half k's S1, their matches and **all** unmatched queries of country c, i.e. ~2.4 unmatched queries per indexed S1. Every stage is cross-fitted P0 ↔ P1.
+- **Stage-2 competition context.** Built from out-of-fold stage-1 scores: the query's runner-up margin, and the other queries competing for the same S1.
 
 ---
 
 ## 3. Candidate Generation (Blocking)
 
-**Normalization (same for S1, S2, S3 and all countries).**
+- **Normalization** is the same for every source and country:
+  - unidecode, lowercase, `&` → and, OCR fixes inside alphanumeric tokens, doubled-letter collapse;
+  - legal forms canonicalized and split off (`legal`, `name_core`, squashed `name_sq`); DBA names split into both parts;
+  - null addresses flagged; address digit strings extracted (`addr_nums`, leading zeros stripped).
+  - **Transliteration dictionaries** are learned from train true pairs with a non-Latin query (token alignment; ≥ 3 occurrences, ≥ 50% purity): 694 name and 30 address entries. On held-out S1 they raise the share of non-Latin true pairs that share a core token from 0.31 to 0.999.
+- **Blocking keys:** one sparse TF-IDF matrix per country over the S1 index (sublinear tf, **absolute document-frequency cap 10,000**, blocks L2-normalized and weighted):
+  - name word unigrams (0.25);
+  - address word uni+bigrams (0.50);
+  - character 4-grams of `name_sq` (0.25).
 
-- *Name:*
-  - Strip ID tags and web handles.
-  - unidecode → lowercase → `&`→"and" → non-alphanumerics to spaces.
-  - OCR fixes inside alphanumeric tokens, then doubled-letter collapse.
-  - For non-Latin records, the learned name dictionary.
-  - Legal forms canonicalized and split off (`legal`), leaving the core name (`name_core`) and a squashed core without spaces (`name_sq`).
-  - A DBA name is split into both parts.
-- *Address:* the same basic cleaning, the learned address dictionary for non-Latin records, null markers → missing, and extraction of the digit strings (`addr_nums`).
-- *Transliteration dictionaries:* learned from train true pairs whose query is non-Latin. For names, token-by-token alignment when the token counts match; for addresses, the single residual token. An entry is kept when seen ≥ 3 times with ≥ 50% purity. Result: 694 name and 30 address entries. On held-out S1, the share of non-Latin true pairs that share a core token rose from 0.309 to 0.999.
-
-**Blocking keys used.** One sparse TF-IDF matrix per country over the S1 index (sublinear tf, smoothed IDF, **absolute document-frequency cap of 10,000**, each block L2-normalized and weighted):
-
-| block | tokens | weight |
-|---|---|---|
-| name words | unigrams of the normalized name | 0.25 |
-| address | word unigrams + bigrams of the normalized address | 0.50 |
-| squashed name | character 4-grams of `name_sq` | 0.25 |
-
-Each query keeps its **top-10 S1 by cosine** (sparse top-n matrix product, `sparse_dot_topn`).
-
-- **Candidate pairs generated:** **99,695,099** on test (US 38.2M, India 47.2M, France 14.3M): 10 per query, 9.97M queries. That is ≈ 1 candidate pair per 67,000 pairs of the per-country S1 × query cross product (6.7·10¹² pairs).
-- **How we ensured true matches were not lost:**
-  - The DF cap keeps rare, discriminative tokens and removes stop-like ones such as street types and city names.
-  - The char-4 squashed-name block survives spacing, typos and concatenations.
-  - The learned dictionaries recover transliterated names: with them, India reached R@1 0.963 / R@10 0.981 on the full-country index in our study.
-  - We measured pair recall on the test-density pools (true pairs kept in the top-10):
-
-| pool | R@1 | R@10 | oracle F0.5 (perfect matcher on candidates) |
-|---|---|---|---|
-| US (P0 / P1) | 0.976 / 0.976 | 0.991 / 0.991 | 0.997 / 0.997 |
-| India (P0 / P1) | 0.968 / 0.968 | 0.984 / 0.984 | 0.995 / 0.995 |
-
-  An unpruned character-3-gram TF-IDF index reached R@10 0.988 (US) / 0.975 (India) at ~20 ms/query (≈ 60 h for test), so we rejected it.
+  Each query keeps its **top-10 S1 by cosine** (`sparse_dot_topn`).
+- **Candidate pairs generated:** **99,695,099** on test (US 38.2M, India 47.2M, France 14.3M), 10 per query.
+- **Keeping true matches:**
+  - The DF cap keeps rare tokens and drops stop-like ones.
+  - The char-4 block survives spacing and typos, and the dictionaries recover transliterations.
+  - Measured on the pools: R@10 **0.991** (US) and **0.984** (India); a perfect matcher on these candidates would reach macro F0.5 0.997 / 0.995.
+  - An unpruned char-3 index was only as good (R@10 0.988 / 0.975) at ~20 ms/query (≈ 60 h for test), so we rejected it.
 
 ---
 
 ## 4. Matching Model
 
-**Features used (stage 1, 50 features, all country-agnostic):**
-
-- *Blocking context (12):* blocking cosine and rank, the query's top-1 and top-2 cosine, gap to the top, number of candidates, how often the S1 is someone's top-1, how many queries retrieved the S1, S1 name/address frequency, query name frequency, and the share of the query's name tokens unseen in the index.
-- *Query flags (6):* alias, web handle, ID tag, non-Latin, source S3, missing address.
-- *Name (16):*
-  - rapidfuzz ratio, token-sort, token-set, partial and Jaro-Winkler on the core name, ratio on the full name, ratio/partial on the squashed name. Alias queries take the maximum over their parts.
-  - **Soft Monge-Elkan in both directions**, IDF-weighted. Token similarity: exact; prefix/subsequence 0.9; Levenshtein ≥ 0.8; numeric ±2 at 0.7. Plus the IDF mass of unmatched tokens on each side and the length difference.
-  - Legal form equal / conflicting / both empty.
-- *Address (9):* ratio, token-set, partial-token-set, soft Monge-Elkan both ways, unmatched IDF mass, shared bigrams, maximum IDF of a shared token, token-count ratio.
-- *Numbers (7):* any exact shared number, first number equal, soft number match (±2 or prefix/suffix), minimum absolute difference, both have numbers, number conflict, shared long number (≥ 5 digits, e.g. ZIP/PIN).
-
-**Edit features (14, added in R05):**
-
-- *Name-edit lexicon:* the query's **extra** name tokens (absent from the S1 name) and the S1's **missing** tokens (absent from the query). For each side, the maximum and minimum of a smoothed log-odds of "not a true pair", plus the counts.
-  - The lexicon is learned on labelled pool pairs with a small name edit (≥ 1 shared token, ≤ 2 extra, ≤ 1 missing).
-  - It counts each query at most once per token and needs ≥ 50 queries per token. Unmatched queries sit in both pools, so pair-level counts leaked their own labels.
-  - It is cross-fitted: P0 features use the P1 lexicon and vice versa; test uses both.
-  - During training the lexicon features are blanked for a random 30% of queries (feature dropout), so the model also learns the label-free route it needs in France, whose generator words never occur in train.
-- *Lexicon imputation for unseen vocabularies (France):*
-  - In each partition, a word that makes up ≥ 0.5% of the top-1 pairs as their single appended edit (appended last in ≥ 90%) has the generator profile.
-  - If it lacks that profile in the train pools, its lexicon value is raised to the median log-odds of the train generator-profile words (9.16).
-  - In test this fires only for France's seven generator words and leaves the pools untouched.
-  - It closes a measured gap. Before the fix, a query appending a generator word to an otherwise identical record was linked in 2.1% of such top-1 pairs in France, against 0.3% in the US and ~0% in India.
-  - Applied to the final model, it removes 22.4k France links and adds 0.7k; US and India are untouched. All but 406 of the removed links have a French generator word as an extra token, either appended or replacing a word at an identical address ("Mam Club SARL" vs "Mam SARL France").
-  - France moves to 3.23 links per S1. That is what its query volume implies at the same distractor rate as US and India (≈ 3.23 true matches per S1), where it had been 3.31.
-- *Label-free edit shape:* whether the extra token is the query's last (appended) or first (prepended) core token, and whether the missing token is the S1's last. Also the frequency of the extra token as the single edit of top-1 pairs in the same partition, computed on the test partition itself for France.
-- *Unmatched numbers:* numbers present in one address but not the other (counts), their minimum absolute offset (a generator shift is small), and whether one is a prefix or suffix of the other (the dropped-digit noise of true matches).
-
-**Stage 2 (11 additional features, computed from out-of-fold stage-1 probabilities p1 over all candidates):**
-
-- *Per query:* p1, the query's maximum and second p1, the margin, the pair's rank in the query, and whether it is the query's argmax.
-- *Per S1, among the queries whose argmax is this S1 (excluding itself):* the count with p1 ≥ 0.5 overall and from the same source, the sum of p1, the maximum competing p1, and this pair's rank.
+**Features used (stage 1: 80, all country-agnostic):**
+- *Base (50):*
+  - blocking context: cosine, rank, gap to the query's top, candidate counts, how often the S1 is someone's top-1, name/address frequencies, out-of-vocabulary share;
+  - query flags: alias, web, ID tag, non-Latin, source, missing address;
+  - name: rapidfuzz ratio / token-sort / token-set / partial / Jaro-Winkler, IDF-weighted soft Monge-Elkan both ways, unmatched IDF mass, legal-form equal / conflicting;
+  - address: ratio, token-set, soft Monge-Elkan, shared bigrams, maximum shared IDF;
+  - numbers: exact / first / soft match, minimum absolute difference, shared long number.
+- *Edit (14):*
+  - For the query's **extra** name tokens (absent from the S1) and the S1's **missing** ones: the max/min of a smoothed log-odds of "not a true pair".
+  - The lexicon is learned on labelled pool pairs, counted once per query (≥ 50 queries), and cross-fitted (P0 features use the P1 lexicon).
+  - Also: whether the extra token is appended or prepended, its label-free frequency as the single edit of top-1 pairs, and unmatched-number counts, offset and prefix/suffix relation.
+- *Number (16, R10):* q_only / s_only are the numbers one address has and the other lacks; every (q_only, s_only) pair is compared as q − s.
+  - Features: all equal; count shared; # pairs with q − s ∈ GEN; ∈ {−1, −2}; ∈ −GEN; signed closest difference; Levenshtein-1 digit edit; transposition; digit-length difference.
+  - Street-token Jaccard, *equal numbers & same street*, and *single +GEN shift & same street*.
+  - **Number-oracle lexicon (NOL), label-free, computed per partition (each pool and each test country):**
+    - On blocking rank-1 pairs, a single +GEN shift on the same street marks a distractor proxy D, and equal numbers on the same street a true proxy T.
+    - For each name token w the query adds (or drops): nol(w) = log((c_D(w) + 1)/N_D) − log((c_T(w) + 1)/N_T), with ≥ 20 occurrences required.
+    - Features: max/min over the pair's tokens.
+    - Without labels it reproduces the supervised lexicon (US *eastgate* 8.4, *holdings* 7.3; *dba* −8.1). In France it finds that country's generator words (*international, participations, distribution, holding* ≈ 4.7) with no French training data.
+- *Stage 2 (+11):*
+  - per query: p1, max/second p1, margin, rank, is-argmax;
+  - per S1, over the queries whose argmax it is: the count with p1 ≥ 0.5 (all / same source), Σp1, the best competitor, and the pair's rank.
 
 **Model type:** LightGBM binary classifiers.
-
 - Stage 1: 127 leaves; stage 2: 63 leaves.
-- Learning rate 0.05, min_child_samples 100, feature/bagging fraction 0.8, early stopping on a 10% query holdout.
-- Two models per stage, cross-fitted on the pools (train on P0 → score P1 and vice versa). Each is trained on ⟨15%⟩ of its pool's queries, ⟨≈10M⟩ pairs. On test, stage-1 and stage-2 scores are the average of the two pool models.
+- lr 0.05, min_child 100, feature/bagging fraction 0.8, λ2 1; early stopping on a 10% query holdout.
+- The supervised lexicon is blanked for 50% of training queries (feature dropout), so the model also learns the label-free route France needs.
+- Two cross-fitted models per stage, each trained on **all** of its pool's queries (58.5M pairs, 80 features) on a 32-vCPU VM. Test scores average the two pool models.
+- A parameter A/B on 10% of P0 (stage-1 holdout log-loss) found 255/511 leaves no better.
+- The number features cut log-loss by **8.3%** at equal data (0.004202 → 0.003854); doubling the data had given 5.5%.
 
-**Threshold selection method.** Each query links only to its highest-p S1, and ties (margin < 1e-6) get no link. Within each S1, links are ranked by p: the first is kept if p ≥ **T1** and later ones if p ≥ **T2**. We grid-search (T1, T2) directly for **macro F0.5** on the pooled out-of-fold, test-density predictions, from T1 ∈ [0.10, 0.90] and T2 ∈ [0.30, 0.96] in steps of 0.02. Selected: **T1 = 0.52, T2 = 0.74** for the final blend (single runs: (0.48, 0.76) and (0.50, 0.76)). The optimum is flat: the top-8 grid points are within 1e-5. Alternatives gave nothing on the same OOF:
-- per-country thresholds: +0.00000;
-- an expected-F0.5 per-entity rule: +0.00002;
-- a third threshold for rank ≥ 3: +0.00000.
-
-A single pooled pair also applies unchanged to France.
+**Threshold selection method:** grid search of (T1, T2) for **macro F0.5** on the pooled out-of-fold test-density predictions, T1 ∈ [0.10, 0.90], T2 ∈ [0.30, 0.96], step 0.02. The final uses (0.56, 0.74) for the x3+x4 blend (US, India) and (0.52, 0.74) for the x1+x2 blend (France).
+- The optimum is flat (top points within 1e-5).
+- Per-country thresholds, an expected-F rule and a third threshold each gave ≤ +0.00002.
+- A label-free plug-in check puts France's optimum in the same place as US/India's.
+- Links beyond the generator's caps (5 S2 / 6 S3 per S1) are dropped, lowest p first.
 
 ---
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro), out-of-fold on the test-density pools (2.2M S1): 0.98706** for the final blend (single 30%-data run: 0.98705, US 0.98848, India 0.98490). Public leaderboard (a subset of test): **0.97988**, rank 146 (26 Sep). Most of the 0.007 gap to OOF is France, which has no labels, so OOF cannot measure it; label-free diagnostics put France near 0.95 against about 0.985 for US and India. The bucket table, loss decomposition and error analysis below are for the 15%-data run (0.98645, US 0.98799, India 0.98412, precision 0.996, recall 0.969); the final run has the same profile with ~9% fewer false positives.
-- By number of true matches per S1:
-
-| true matches | share of S1 | F0.5 | precision | recall |
-|---|---|---|---|---|
-| 0 (singleton) | 5.6% | 0.980 | – | – |
-| 1 | 5.4% | 0.957 | 0.982 | 0.964 |
-| 2–3 | 41.1% | 0.987 | 0.995 | 0.970 |
-| 4+ | 48.0% | 0.990 | 0.998 | 0.968 |
-
-- **Loss decomposition (OOF, tuned):**
-  - With every false positive removed, F would be 0.9901.
-  - With every false negative that blocking kept recovered, F would be 0.9926.
-  - The 237k false negatives split into 38% blocked out, 40% right argmax but below threshold, and 22% another S1 won.
-  - 93% of the 39.7k false positives come from queries with no true candidate.
+- **F_0.5 Score (macro):** out-of-fold on the test-density pools (2.2M S1): **0.98848** for the x3+x4 blend (x3 alone 0.98838: US 0.98977, India 0.98630). Public leaderboard: **FINAL_LB** for the final file (best so far 0.982401, rank 320).
 - **Common false positives (wrong merges):**
-  - 81% are the third-or-later link of an S1.
-  - Typical cases are queries without an address matched on the name alone, and S1 that share a name with a business in another city ("Wildlife Committee LLC" in NY and in MO).
-  - The rest are generator records whose appended word is also common true-match noise ("… Center", "… Private Limited").
+  - Queries **without an address** matched on the name alone when several S1 share that name ("Wildlife Committee LLC" in NY and MO).
+  - Generator records whose word edit is also common true-match noise ("… Center", "… Private Limited").
+  - 93% of false positives come from queries with no true candidate.
 - **Common false negatives (missed matches):**
-  - *Blocked out* (0.9% of US, 1.6% of India true pairs):
-    - 77% of the US misses (44% in India) are queries **without an address** whose name belongs to several S1, so they are unresolvable by design.
-    - The rest are fully Devanagari/Bengali names or brand names with partial addresses.
-  - *Below threshold* (p quartiles 0.28–0.64): OCR-damaged names ("OPTlMAL"), true matches whose house number is off by one (10990 vs 10991, which looks like a generator shift), and true matches that append a word the generator also uses ("… Enterprises", "… LLC").
+  - **38% blocked out**: mostly address-less queries whose name belongs to several S1 (unresolvable), plus fully Devanagari/Bengali names.
+  - **40% right argmax but below threshold**: OCR-damaged names, true matches with a house number off by one or two.
+  - 22% another S1 won.
 
-| run | what changed | OOF F0.5 | LB |
+| run | what changed | OOF F0.5 | public LB |
 |---|---|---|---|
-| baseline | char-3 TF-IDF blocking, LightGBM, one threshold (small-scale study) | 0.983 | – |
-| tier 0 | new normalization + blocking + 50 features, stage 1 only, T = 0.76 | 0.97623 (P1) | – |
-| stage 1, cross-fit | both pools out of fold | 0.97613 (best single T 0.97668) | – |
-| + edit features | 14 generator-aware side features, stage 1 | 0.98455 (0.98462) | – |
-| + stage 2 + (T1, T2) | competition context, tuned policy (0.48, 0.76) | 0.98645 | – |
-| + 2× training data | 30% of each pool's queries per model (float16 matrix), tuned (0.50, 0.76) | 0.98705 | – |
-| + blend | mean of the 15% and 30% runs' stage-2 scores, re-tuned (0.52, 0.74) | **0.98706** | – |
-| + France lexicon imputation (**final**) | test-only, label-free (pools unchanged): −22.4k / +0.7k France links | 0.98706 | **0.97988** |
-
----
+| tier 0 | normalization + blocking + 50 features, stage 1, T = 0.76 | 0.97623 | – |
+| R05 (x1) | + 14 edit features, stage 2, tuned (T1, T2); 15% of queries | 0.98645 | – |
+| R06 (x2, blend x1+x2) | 30% of queries; blend | 0.98706 | **0.981021** |
+| R07 | + France lexicon imputation | 0.98706 | 0.979881 |
+| R08 | + France normalization rules | 0.98706 | 0.979 |
+| R09 | R06 + France same-address rescue | 0.98706 | 0.976531 |
+| R10 (x3) | + 16 number features, all queries (58.5M pairs per model), US/India only; France from R06 | **0.98838** (US 0.98977, India 0.98630) | **0.982401** |
+| R10 (x3, all countries) | the same with x3's own France predictions | 0.98838 | 0.982123 |
+| **final** | **x3+x4 blend (x4: 255-leaf variant) for US/India; x1+x2 for France** | **0.98848** | **FINAL_LB** |
 
 ### What we tried that did not help (measured)
 
 | idea | result |
 |---|---|
-| unpruned char-3-gram TF-IDF blocking | R@10 0.988 / 0.975 (US/India), but ~20 ms/query ≈ 60 h for test, so rejected for the capped sparse design |
-| per-country (T1, T2) thresholds | 0.98645 = pooled (India own (0.56, 0.76), US own (0.48, 0.78)) |
-| expected-F0.5 per-entity link selection | 0.98647 (+0.00002) |
-| third threshold for the 3rd+ link of an S1 | 0.98645 (+0.00000) |
-| more candidates per query (K > 10) | not run. Most blocked-out true pairs are address-less queries whose name belongs to several S1 in other cities, so they are unrecoverable by any blocking key |
-| lexicon counted per pair instead of per query | leaks labels (unmatched queries sit in both pools); a small A/B showed 0.00556 vs 0.00569 logloss, and the leak-free per-query version is used |
-| LLVM-compiled tree inference (`lleaves`) to speed up scoring | compiling the 1,400-tree model needed > 6 GB of RAM, so we abandoned it |
+| **France lexicon imputation** (R07): give France's frequent appended words the train generator-word weight | −0.0011 LB. *france, groupe, développement* are also French true-match noise |
+| **France normalization rules** (R08): street types, regions/departments, spaced legal forms, et → and | −0.0009 LB (on top of R07); "et fils" → "and fils" looked like the US "& Sons" distractor |
+| **x3's own France predictions** (number features + NOL) | −0.00028 LB vs the x1+x2 France predictions; x3 links more equal-address name swaps, which in France are mostly distractors |
+| **France same-address rescue** (R09): force-link argmax pairs with equal house numbers on the same street | −0.0045 LB; only ~25% of the 50.7k added links were true. France's generator keeps the house number far more often than US/India (−0.0012 on US/India OOF too) |
+| bigger trees (255 / 511 leaves) | stage-1 log-loss +0.8% / +1.9% |
+| per-country thresholds / expected-F rule / third threshold | ≤ +0.00002 OOF |
+| unpruned char-3 blocking | ~60 h for test |
+| per-pair (instead of per-query) lexicon counts | leaks labels (unmatched queries sit in both pools) |
+
+---
 
 ## 6. Conclusion
 
-- **Validation:** a test-density validation design (half the S1 of each country plus every unmatched record, cross-fitted) made thresholds and model choices transfer to the test set.
-- **Largest gain:** understanding how the unmatched records were generated (shifted house numbers and a small vocabulary of appended words) was worth more than any model change. The 14 generator-aware features lifted out-of-fold macro F0.5 from 0.976 to 0.985 at stage 1.
-- **Stacking and data:** stage-2 competition context, twice the training data and a two-run blend added the rest.
-- **France:** a label-free lexicon imputation carries the generator-word signal to France, which has no labels.
-- **Engineering:** every stage streams on a 13 GB laptop.
+- **Largest gain:** modelling the generator of the unmatched records: which words it appends, and that it shifts house numbers upward by a fixed set. Features built on that mechanism were worth more than any model or data change.
+- **Validation:** test-density, cross-fitted pools made thresholds and model choices transfer to test.
+- **France:** with no labels, the leaderboard was the only judge. Every France-specific change lost there: three hand-made rules, and the stronger model's own France predictions. France keeps the earlier x1+x2 predictions. Its generator differs from US/India: it often keeps the house number and swaps an organisation word, so "same address" is weaker evidence there.
 
 ---
 
@@ -212,40 +169,19 @@ A single pooled pair also applies unchanged to France.
 
 ### A. Code Artefacts
 
-`code/business_entity_resolution/` (entry point `src/run.py`; the steps are in `README.md`, and `run_all.sh` runs them all):
+`code/business_entity_resolution/` (entry point `src/run.py`; steps in `README.md`; `run_all.sh` runs everything):
 
 | module | role |
 |---|---|
-| `ber/normalize.py`, `ber/translit.py` | normalization; transliteration dictionaries learned from train GT |
-| `ber/pools.py` | md5 half-split, test-density validation pools |
-| `ber/blocking.py` | per-country sparse TF-IDF top-10 blocking and the recall report |
-| `ber/features.py` | 50 stage-1 features (context arrays + forked string-feature workers) |
-| `ber/model.py`, `ber/context.py` | LightGBM cross-fit, stage-2 context, OOF evaluation, LOCO |
-| `ber/decide.py`, `ber/metrics.py` | argmax + (T1, T2) policy, threshold grid, macro F0.5, loss decomposition |
-| `ber/submit.py` | test inference, both output files, checks and the validator |
+| `ber/normalize.py`, `ber/translit.py` | normalization; transliteration dictionaries learned from train |
+| `ber/pools.py`, `ber/blocking.py` | test-density pools; per-country TF-IDF top-10 blocking |
+| `ber/features.py`, `ber/xfeats.py`, `ber/nfeats.py` | 50 base, 14 edit, 16 number features |
+| `ber/model.py`, `ber/context.py` | cross-fitted two-stage LightGBM, stage-2 context |
+| `ber/decide.py`, `ber/metrics.py` | argmax + (T1, T2) policy, caps, macro F0.5, loss decomposition |
+| `ber/submit.py`, `ber/rescue.py` | test inference, blends, validator; the (disabled) R09 rescue |
 
-Command order: `env check1 check2 norm dicts norm pools block feats check8 train1 train2 tune predict`.
-
-- **Runtime** on a 6-core / 13 GB laptop (AMD Ryzen 5 5600H):
-  - normalization + dictionaries ~20 min;
-  - blocking 1 h 36 min;
-  - stage-1 features 44 min (230M pairs, 8 workers);
-  - edit features 26 min;
-  - run x1 (15% of queries) 2 h: stage 1 36 min, stage 2 26 min, tuning 3 min, test scoring 61 min;
-  - run x2 (30%) ~3.5 h;
-  - blend ~15 min.
-- **Data:** no external data or pretrained models. Every statistic (IDF, dictionaries, models) comes from the provided training files.
-- **Libraries:** polars, numpy, scipy, scikit-learn, sparse-dot-topn, rapidfuzz, Unidecode, LightGBM (all MIT/BSD/Apache).
-
-### B. Additional Results
-
-- **Engineering for a 13 GB laptop:**
-  - Every stage streams: 2M-pair feature files, and feature floats rounded to 10 mantissa bits (34 bytes per pair on disk).
-  - Predictions are `.npy` arrays, and the stage-2 context is rebuilt in memory from p1.
-  - The sparse top-n product runs faster with 4 threads than 8, because it is cache-bound.
-- **Deviations from the original design:**
-  - "emmalynn" → "emalyn" (the doubled-letter collapse is applied everywhere).
-  - Typographic punctuation (U+2000–U+20CF) is not treated as non-Latin.
-  - Legal forms are canonicalized inside `name_norm`.
-  - Stage-2 ranks give tied competitors the same rank.
-- ⟨LOCO / hand-map A/B results if run⟩
+- **Runtime:**
+  - On a 6-core / 13 GB laptop: normalization + dictionaries 20 min, blocking 1.6 h, features 45 min, edit features 26 min.
+  - On a 32-vCPU / 128 GB VM: number features 19 min; run x3: stage 1 61 min (two 3,000-round models on 58.5M pairs each), stage 2 36 min, tuning 3 min, test scoring ~40 min.
+- **Data:** no external data or pretrained models. Every statistic comes from the provided files.
+- **Libraries:** polars, numpy, scipy, scikit-learn, sparse-dot-topn, rapidfuzz, Unidecode, LightGBM (MIT/BSD/Apache).
