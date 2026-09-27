@@ -33,9 +33,14 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
 | R20e | 27 Sep 19:08 | R20d + France CE veto (−1,737 France links the large CE rejects in address-driven classes) | – | – | pending | pending | `output_r20e/` validator PASS; best candidate so far; projected 0.98900 (0.98855–0.98925) |
 | R20f | 27 Sep 19:24 | R20e with the veto restricted to real address mismatches (asim < 90) or different-business names (−1,513 instead of −1,737) | – | – | pending | pending | `output_r20f/` validator PASS; **best candidate**; projected 0.98898 (0.98855–0.98925) |
 | R20g | 27 Sep 19:27 | fallback: s8b + India rescue v2 + US rescue (France = s8b) | India 0.99215, US 0.99228 | – | not uploaded | – | `output_r20g/` validator PASS; use if upload 1 shows the France changes lose; projected 0.98858 |
+| R20j | 27 Sep 21:10 | s8b + rescue v4 (rescue candidates re-scored with a new xlm-r-large cross-encoder trained on them): India +18,586, US +2,115 (France = s8b) | **India 0.99262 (+0.00155), US 0.99237 (+0.00028)** | – | pending | pending | `output_r20j/` validator PASS, all 5,839,748 links ⊆ candidates (128,969,685), sha256 `ac54a967…`; **final candidate**; projected 0.98860–0.98895 |
+| R20k | 27 Sep 21:30 | r20j + France precision package R2: −6,294 France links that the France stage-3 model (pfr, never uploaded) drops **and** the large CE rejects (< 0.3), excluding LB-backed classes; includes veto2 (1,298 of 1,513 overlap) | US/India = r20j | – | pending | pending | `output_r20k/` validator PASS, sha256 `a2553c98…`; upload 2; projected 0.9888–0.9897 |
+| R20l | 27 Sep 21:34 | r20j + France R3: R2 without the category→true-noise-word swaps (−3,164 France links: R3 2,949 ∪ veto2) | US/India = r20j | – | **0.989472** | **96** | `output_r20l/` uploaded ~21:50 (upload 2 of 3); **new best, +0.001695 vs s8b** (projected 0.9887–0.9894) |
+| R20p | 27 Sep 22:37 | r20l + 2,375 France adds (pfr p3 ≥ 0.95 ∧ large CE ≥ 0.95, x1+x2 unlinked; excluding upload-1 adds, category/TN classes and +GEN) − 74 more R3-pattern removals | US/India = r20j | – | **0.989507** | **108** | `output_r20p/` uploaded ~23:30 (upload 3 of 3); **best public score, +0.000035 vs r20l** (projected 0.98947–0.98960). Below the 0.989522 switch bar and not reproducible from the package code, so the final zip stays r20l |
 | R20h | 27 Sep 19:29 | R20f + France transfer extension E1/E2 (+3,727 France links in the same Type-B-proof cells; street matched after stripping region/department words) | – | – | not uploaded | – | `output_r20h/` validator PASS; final if upload 1 confirms the France transfer; projected 0.98917 |
+| R21 | 27 Sep 23:10 | listwise cross-encoder for uncertain US/India queries (handoff idea 1) | – | – | not built | – | **abandoned**: started at 23:02 with 57 min left; needs 2–3 h (idea 2 ≈ 85 min). Final zip stays r20l |
 
-**Current best on LB:** **R19 `output_s8b/` = 0.987777 public, rank 145** (27 Sep ~17:05; the user got 2 extra submissions, so 3 uploads are left). Top-2 re-rank with xlm-roberta cross-encoders for US/India; R06 France + edits (a, c, d, e). Previous: R14 `output_s3/` 0.984009 (rank 347).
+**Current best on LB:** **R20p `output_r20p/` = 0.989507 public, rank 108** (27 Sep ~23:30; r20l + 2,371 France adds − 74 removals; the rank fell as other teams improved). **The final zip holds R20l `output_r20l/` = 0.989472, rank 96** (27 Sep ~21:50; s8b + India/US rescue v4 + France R3 removals). Before: **R19 `output_s8b/` = 0.987777 public, rank 145** (27 Sep ~17:05; the user got 2 extra submissions, so 3 uploads are left). Top-2 re-rank with xlm-roberta cross-encoders for US/India; R06 France + edits (a, c, d, e). Previous: R14 `output_s3/` 0.984009 (rank 347).
 
 ---
 
@@ -838,3 +843,119 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
   - Training sets: P0 58k pairs (8.4k positive), P1 58k pairs.
   - Setup: 3 passes, cross-fitted P0 ↔ P1; test scored by both models (141k pairs).
   - Rescue v4 adds its logit and within-query rank/gap as features.
+
+## R20j · rescue cross-encoder + rescue v4 (final candidate) · 27 Sep 21:10
+- **Approach:**
+  - **Rescue cross-encoder:** xlm-roberta-large (lr 1e-5, bs 32, len 128, bf16, 3 passes), trained on the rescue candidates: the top 4 per target query where the v2 rescue score is ≥ 0.03, raw "name | address" text, US+India together.
+    - Pool sizes: P0 58k pairs, P1 58k pairs.
+    - Cross-fitted: the P0 model scores P1 and the P1 model scores P0; test takes the mean of both models' logits.
+  - **Rescue v4:** v2 features + CE logit + within-query CE rank / gap to the best / margin over the runner-up. LightGBM (127 leaves), cross-fitted, τ tuned on OOF. Gain importance is dominated by ce_mg / ce_gap (India 0.69, US 0.87).
+- **Data:** full P0/P1 pools and test. A100 518671, ~21 min per fold with both folds in parallel; LightGBM on the 32-vCPU VM 518672.
+- **Results:**
+  - CE holdout: logloss 0.055 / 0.043, accuracy 0.989 / 0.992.
+  - Rescue holdout logloss: India 0.00088 / 0.00075 (v3 0.00124 / 0.00119); US 0.00030 / 0.00023.
+  - **India OOF 0.99107 → 0.99262 (+0.00155; v2 +0.00108)** at τ 0.7: 12,746 additions at precision 0.968 (v2: 9,789 at 0.925). The F curve is flat for τ 0.5–0.95.
+  - **US OOF 0.99210 → 0.99237 (+0.00028; v2 +0.00018)** at τ 0.85: 3,986 additions at precision 0.984.
+  - Test: India +18,588 (+18,586 kept), US +2,115. That is 0.58 additions per CE-scored query on test vs 0.56 on OOF. 95% of r20g's additions are kept.
+  - `output_r20j/` = s8b + both. Validator PASS; 5,839,748 links, all in `work/final_cands/candidate_pairs.tsv` (sha256 `c4f0dda6…`); no query linked twice. sha256 `ac54a967…`.
+- **Projection:** OOF gains × LB weights = +0.00083 (India 0.00072, US 0.00011) → 0.98861. With the test/OOF addition ratio (≈ 1.4×) used for R20g, up to +0.0012 → 0.98895. Range 0.98860–0.98895.
+- **LB:** **0.989472, rank 96** (upload 2, ~21:50). +0.001695 vs s8b, above the projection. R3 can give at most ≈ +0.0004 (3,164 removals × ≤ 0.21 S1-units each), so the rescue gave ≥ +0.0013, about 1.5× its OOF gain, like R14.
+- **Package:**
+  - Ported as `r20_build_rce.py`, `r20_rce_train.py` and `r20_rescue4.py`; `run_stage3.sh` step 8 rewritten (France transfer and veto out of the final, rescue v4 in).
+  - README step 8 and Documentation §1 / §4.3 / §5 / §6 updated; the final LB placeholder is `R20J_LB`.
+  - A100 paused at 21:05.
+- **Takeaways:**
+  - The rescue's limit was discrimination between address-similar S1s, not features. A cross-encoder trained on the same hard candidates fixed half of the remaining in-candidate misses.
+  - France label-free edits keep losing, so France stays at s8b.
+- **Next:** upload r20j (upload 2 or 3), fill `R20J_LB`, build the final zip.
+
+## R20k · France precision package from the France stage-3 model + CE agreement · 27 Sep 21:30
+- **Diagnosis (back to basics):**
+  - Predicted links per S1 are the same in all three countries (5.8% of S1s with none; 3.31 links per S1 in France vs 3.37–3.39 in US/India), so France's loss is not recall.
+  - The corrected plug-in puts s8b's France at 0.985, but the LB implies about 0.972. R09 and R20a showed that France's low- and mid-p rows are roughly calibrated, so the hidden ~0.013 must be **confident false links**.
+  - France S1s share an exact address 2.4–2.8× more often than US/India (11.1% vs 4.0% / 4.75%): associations registered at shared addresses.
+  - France same-address no-shared-word links are mostly true: concatenations (`letrierclub`), initials (`es` = entente sportive) and coined names built from the India syllables (`quobelo`, `zephkelo`).
+- **France stage 3 (pfr, R15; US/India OOF 0.99128 vs 0.98706 for x1+x2):** on France it drops 13,213 s8b links and adds 20,432.
+  - Raw removals: generic names at the same number on another street (`bordeaux colege sasu`, 40 r labtotiere vs 40 av georges clemenceau); a category word swapped for a true-noise word at the same address (`zip france` vs `zip primaire`, `montagne groupe sarl` vs `montagne culturele sarl`); initialism edits (`ozg amicale` vs `oig amicale`).
+  - Calibration on US/India OOF where x1+x2 p ≥ 0.8 but p3 < 0.76 (true rate by p3 band): p3 < 0.2 → 0.021; 0.2–0.4 → 0.31; 0.4–0.58 → 0.52; 0.58–0.76 → 0.68.
+- **R2 = pfr removals ∩ (large CE < 0.3 or unscored).** It excludes the LB-backed classes: edit-(e)/(c) links (p < 0.5), acronyms, pure true-noise appends, and no-shared-word links (coined names, CE ≈ 0.9).
+  - 6,079 links: eq TN-swap 2,595, eq same-core 1,069, eq rest 693, na TN 407, other same-core 347, …
+  - Union with veto2 (1,298 of its 1,513 already inside) gives **−6,294 France links**.
+- **Results:** `output_r20k/` = r20j with France = s8b − R2. Validator PASS; France links 851,447 (3.2817 per S1). sha256 `a2553c98…`.
+- **Projection:** if pfr is as calibrated on France as on US/India, R2 is ~35–40% true → +0.0025 France F → +0.0004 LB. So r20k ≈ 0.9888–0.9897.
+- **LB:** pending (upload 2).
+
+## R20l · safer France removal set R3 · 27 Sep 21:34
+- **Why:** pfr's France *additions* are mostly equal-address category swaps (7,769 rows; pfr p3 median 0.96, large CE 0.997). The LB has shown that class is about 0% true (R09, x3 attribution), so both models carry a US habit into France name swaps. R2's largest block is the mirror case: a category word swapped for a true-noise word (`montagne groupe sarl` vs `montagne culturele sarl`), which both models reject. France's +GEN band shows distractor swaps never use the true-noise words, so these are probably true noise, and R2 is risky there.
+- **R3** = R2 minus every TN_in kind: 2,949 links. Removals by kind:
+  - eq same-core, same number on another street or in another city: 1,069;
+  - eq rest, category swaps and initialism edits the class rule misses: 693 (`ld france logistique` vs `ld france loisirs`, `gvz jeunes` vs `dvz jeunes`);
+  - other same-core, same street with a different number and legal form: 347;
+  - na same-core: 287;
+  - smaller kinds make up the rest.
+  
+  With veto2 the total is **−3,164**.
+- **Results:** `output_r20l/` validator PASS, France 854,576 links (3.2938 per S1), sha256 `99a0fc04…`.
+- **LB:** pending.
+
+## R20m · further France checks (negative) · 27 Sep 21:37
+- **Missed category swaps:** one known word swapped for another at eq/na/other numbers, outside TN words and typos. Only 1,429 linked; 484 are already in R3 or cat_swap. The rest are mostly abbreviations (`st` = saint, `ce` = comite, `el` = ecole: true noise). Nothing to add.
+- **Address-less France queries with name twins:** already unlinked (42 links over 14.2k rows with twins ≥ 2). France's twin share (35% of S1) sits between US (29%) and India (46%).
+- **France blocking rescue** (b2 address-heavy + b3 name twins, with French legal forms added to `blk3.py`):
+  - 2.86M new pairs for 451k unlinked France queries that have an address.
+  - Scored with the US v2 rescue model: 2,472 queries at r ≥ 0.8.
+  - Raw top candidates are generic-name twins at *different* addresses (`nantes club sas`, 4 r de la base chenaie vs 4 avenue sagamore) and category swaps: France's distractor patterns. The India model disagrees (377 agree at 0.8). **Rejected.**
+
+## R20n · structural checks for a large missing lever (negative) · 27 Sep 21:55
+- **Leaks:** none.
+  - Train matched share is flat by row position (0.732–0.735 by decile) and by ID decile.
+  - Consecutive matched S2 rows almost never share an S1 (2.7e-7).
+- **Generator counts are country-independent.**
+  - Train GT: US 3.459 and India 3.465 true links per S1; 5.58% singletons in both; k2 1.672, k3 1.788.
+  - Distractors per source are equal in every split and country: train 0.607 / 0.607; test US 1.150 / 1.146, India 1.183 / 1.181, France 1.039 / 1.032.
+  - So France very likely also has ≈ 3.46 true links per S1 (≈ 898k), against 857.7k predicted.
+- **Calibration against that count:** sum of argmax p vs the expected true argmax count.
+  - OOF: 7,502,046 vs 7,502,163 (exact).
+  - Test: US 2.262M vs ≈ 2.26M; India 2.728M vs ≈ 2.74M; France (x1+x2 p) 0.883M vs ≈ 0.88M.
+  - Every model is calibrated in aggregate. France links fewer pairs because its rows are genuinely more ambiguous (15.6% uncertain vs 4.9% US), not because of a fixable bias. No count-based recalibration lever exists.
+- **Conclusion:** the remaining gap to the top (0.992) is France discrimination on equal-address name edits (true noise vs Type B). It needs France-specific information that only LB probes can validate, and one upload is left.
+
+## R20o · last upload plan and package · 27 Sep 22:27
+- **Extension check:** 160 more links meet the R3 pattern (R3 kinds, CE < 0.1), 74 of them with p3 < 0.9. Negligible; the pattern is used up.
+- **Last upload (3 of 3):** `output_r20k/` = r20l + the 3,130 category→true-noise-word swap removals that R3 held back. The LB keeps the best upload, so this is a free test of that class:
+  - above 0.989472 → those swaps are distractors, and r20k becomes the final zip;
+  - below → the final stays r20l.
+  - Expected ±0.0004.
+- **Package:**
+  - New: `r20_merge_fr.py` (France f12 table + CE logits) and `r20_fr_precision.py` (pfr decision ∧ CE < 0.3, minus the LB-backed classes, ∪ veto2). Verified: it reproduces `fr_pairs_R3` exactly (854,578 pairs).
+  - `run_stage3.sh` step 8e runs the France table, veto, merge, `stage3.py fit` (FPFX=f12ce TEST_C=France OUT=pfr) and precision removals before the rescue patches.
+  - README / Documentation updated for r20l (LB 0.989472, rank 96).
+  - Final zip being built: `CHOSEN=output_r20l CANDS=work/final_cands/candidate_pairs.tsv TEAM=SteinsGate` (log `work/logs/final_package_r20l.log`).
+
+## R20p · last upload: r20k dropped, small positive additions instead · 27 Sep 22:37
+- **Swap-rate test (label-free):** France's +GEN band (all distractors) has category→TN swaps : category→category swaps = 5,647 : 56,574 (0.10).
+  - At the same address there are 38,001 category→category swaps (the Type B distractors), which predicts ≈ 3.8k category→TN distractors.
+  - Observed: 39,258 category→TN swaps at the same address. So ≈ 90% of them are true noise.
+  - **r20k (removing 3,130 of them) is dropped** as likely negative.
+  - The same table shows TN appends are a common Type A edit (80k in +GEN) but rare at equal address (12.4k), consistent with R07.
+- **France adds:** on US/India OOF, x1+x2 p < 0.5 but pfr p3 ≥ 0.95 is 99.4% true (18,749 rows).
+  - France candidates: pfr p3 ≥ 0.95 and large CE ≥ 0.95, outside the category/TN classes and +GEN: 3,353. Minus the 978 that were in the losing upload-1 package: **2,375 adds**. Plus 74 more R3-pattern removals.
+  - F0.5 values an added true link at only ≈ 0.06 S1-units (a removed FP ≈ 0.21), so this is worth ≤ +0.0001 LB.
+- **Ceiling arithmetic:** even if all 3,130 TN swaps were false, their removal would add ≤ 0.0004 (0.98985), and nothing else of size is left. So 0.990 is out of reach with today's levers.
+- `output_r20p/` validator PASS, sha256 `627aea51…`. Last upload (3 of 3). If it scores above 0.989472, rebuild the zip with `CHOSEN=output_r20p`.
+- **22:58:** r20p verified against r20l: US/India identical, France +2,371 / −74 (4 adds dropped by caps), 1,732,544 rows. The zip still holds r20l (sha `ce14222e…` zip, matching `99a0fc04…`). `work/logs/switch_to_r20p.sh <LB> <RANK>` updates the docs and rebuilds the zip with r20p; run it only if r20p ≥ 0.989522, so the choice isn't made on public-LB noise.
+- **LB:** **0.989507, rank 108** (upload 3 of 3, ~23:30). +0.000035 vs r20l, inside the projection but below the 0.989522 switch bar; the rank fell from 96 because other teams improved.
+  - **Zip stays r20l:** the gain is within noise; the France add step (pfr ≥ 0.95 ∧ CE ≥ 0.95) was never ported to `run_stage3.sh`, so the package reproduces r20l, not r20p; re-uploading 743 MB with 25 min left wasn't worth +0.00003.
+
+## R21 · final hour: listwise CE not started (time) · 27 Sep 23:10
+- **Clock:** session started 23:02 IST, 57 min before the deadline.
+- **Idea 1 (listwise CE on each uncertain query's top-4, into the top-2 re-rank):**
+  - Target: "wrong S1 won" + "argmax right, below threshold" = +0.0039 OOF if fully fixed. Realistic +0.0002–0.0008 OOF (+0.0003–0.0012 LB).
+  - Cost 2–3 h: resume both instances and copy data (the A100 has none), about 600k rows per fold at ≈ 135 samples/s, refit p8b, recompose, validate, rebuild the zip (3 min). The zero-delay path ends after 23:59. **Not started.**
+- **Idea 2 (rescue CE round 2):** ≈ 70 min + 15 min compose for +0.0001–0.0002 LB, too small to reach 0.990 and too long. Not started.
+- **Quick levers checked without new training:** a per-S1 expected-F0.5 rule instead of T1/T2 only moves links with p ≈ 0.67–0.8 (≈ +0.00005). Not worth an upload.
+- **r20p:** held back at first (gain too small), then uploaded ~23:30 because the LB keeps the best upload: **0.989507, rank 108** (+0.000035). No instances resumed; ₹0 spent.
+- **Final:** `SteinsGate_submission.zip` = r20l (zip matching sha `99a0fc04…`, LB 0.989472, rank 96), verified 23:02. Kept after r20p's score (23:35): below the switch bar, and the package code does not produce r20p's France adds.
+- **23:13, more GPUs?** No. Setup, row build, p8b refit + T1/T2, compose/validate, upload and zip take ≥ 35 min without any GPU work, so ≤ 10 min of GPU time would be left. That fits only a toy base CE on top-2 rows, which p8b's large CE already scores (R18 took 78 min train + 30 min scoring at this scale).
+- **Takeaway:** idea 1 needed ≈ 3 h and had to start by ~20:30. It remains the best next lever (+0.0003–0.0012 LB) if there is ever another round.
+

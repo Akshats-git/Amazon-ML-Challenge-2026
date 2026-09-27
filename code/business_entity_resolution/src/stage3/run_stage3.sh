@@ -55,34 +55,49 @@ FR_BASE=output FR_X3=output_x3 $PY $D/fr_rules.py a,c,d,e
 #    link >= T1, later >= T2; per-source caps), France from the edited pairs. Then validate (README).
 P3=p8b FR_PAIRS="$S3_DIR/fr_pairs_acde.parquet" $PY $D/compose.py output output
 
-# 8. (R20) France structural transfer + France CE veto; India/US blocking rescue. Work dir: R20_DIR (default $S3_DIR/r20).
+# 8. (R20) India/US blocking rescue with a rescue cross-encoder. Work dir: R20_DIR (default $S3_DIR/r20).
+#    The France structural transfer (r20_fr_transfer.py, +4,317 / -138 links) scored 0.987654 on the LB vs 0.987777
+#    without it, so it is NOT applied; France gets only the precision removals of e).
 R20=${R20_DIR:-$S3_DIR/r20}
-#    a) France: argmax table (link flags, large-CE probability) -> vocabulary-free structural cells with US/India truth
-#       rates. Add France links in same-street cells that cannot hold a France category-swap (Type B) distractor, that US
-#       AND India put at >= 93% true, when the large CE agrees (>= 0.8). Remove +GEN cells <= 15% true in both, and
-#       initialism edits the CE rejects (< 0.1).
-$PY $D/r20_fr_table.py
-$PY $D/r20_cells.py
-$PY $D/r20_initl.py
-$PY $D/r20_fr_transfer.py                      # -> $R20/fr_pairs_P1.parquet
-#    b) France CE veto: drop linked pairs the large CE scores <= 0.05 in address-driven classes (same name, drop, typo,
-#       no shared word at eq / na / other numbers; US/India OOF: 0.5-11% true there)  -> $R20/fr_pairs_P1V.parquet
-$PY $D/r20_fr_veto.py
-$PY $D/r20_patch_fr.py output/matching_results.tsv "$R20/fr_pairs_P1V.parquet" output_r20/fr/matching_results.tsv
-#    c) blocking rescue for queries left unlinked that have an address: (i) address-heavy second retrieval (name 0.1 /
+#    a) candidates for queries left unlinked that have an address: (i) address-heavy second retrieval (name 0.1 /
 #       address 0.8 / char 0.1, top 10, new pairs only), (ii) name-twin expansion (all S1 sharing the core name, ranked
-#       by IDF-weighted shared address tokens, top 10); LightGBM rescue scorer cross-fitted P0 <-> P1; link the best new
-#       candidate if score >= tau (tuned on OOF: India 0.80 -> 0.99107 -> 0.99215; US 0.85 -> 0.99210 -> 0.99228)
+#       by IDF-weighted shared address tokens, top 10); v2 LightGBM rescue scorer cross-fitted P0 <-> P1 (28 features)
 for c in India US; do
   for p in P0 P1 test; do $PY $D/r20_block2.py $p $c 0.1,0.8,0.1 10 a; done
   for p in P0 P1 test; do BASE_TSV=output/matching_results.tsv $PY $D/r20_rescue_feats.py $p $c; done   # target queries
   for p in P0 P1 test; do $PY $D/r20_block3.py $p $c 10; done
   for p in P0 P1 test; do BASE_TSV=output/matching_results.tsv $PY $D/r20_rescue_feats.py $p $c; done   # + name twins
   $PY $D/r20_rescue_train.py $c
+#    b) rescue cross-encoder sets: queries whose best v2 score >= 0.03, top 4 candidates each, raw "name | address" text
+  $PY $D/r20_build_rce.py $c
 done
-$PY $D/r20_rescue_apply.py India 0.8
-$PY $D/r20_rescue_apply.py US 0.85
-$PY $D/r20_patch_add.py output_r20/fr/matching_results.tsv "$R20/rescue_add_test_India.parquet" output_r20/in/matching_results.tsv
-$PY $D/r20_patch_add.py output_r20/in/matching_results.tsv "$R20/rescue_add_test_US.parquet" output_r20/final/matching_results.tsv
-#    d) candidate_pairs.tsv = original blocking candidates U every rescue-scored pair (the rescue model runs inference on them)
+#    c) GPU (A100 40GB, ~21 min per fold, both folds in parallel): xlm-roberta-large, 3 passes over one pool's rescue
+#       candidates (US+India), scores the other pool + test
+for f in P0 P1; do
+  CE_DIR=$R20/rce CE_TAG=rxl CE_MODEL=FacebookAI/xlm-roberta-large CE_BS=32 CE_EBS=256 CE_LEN=128 CE_LR=1e-5 CE_BF16=1 \
+    CE_FREEZE_EMB=0 CE_NW=4 CE_REP=3 $PY $D/r20_rce_train.py $f > $R20/rce/tr_$f.log 2>&1 &
+done
+wait
+#    d) rescue v4 = v2 features + CE logit and its within-query rank / gap to the best / margin over the runner-up;
+#       cross-fitted, tau tuned on OOF (India 0.99107 -> 0.99262 at 0.7; US 0.99210 -> 0.99237 at 0.85); links the best
+#       new candidate of each target query when its score >= tau
+$PY $D/r20_rescue4.py India
+$PY $D/r20_rescue4.py US
+#    e) France precision removals (R20l): France argmax table + large-CE probabilities, the CE veto (its inputs come from
+#       the transfer tables, which are built but not applied), the France stage-3 model (stage 3 rebuilt on x1+x2 with
+#       France-safe features; US/India OOF 0.99128), then drop s8b France links that stage 3 drops AND the large CE
+#       rejects (< 0.3), except LB-backed classes, plus the veto: -3,164 France links
+$PY $D/r20_fr_table.py
+$PY $D/r20_cells.py
+$PY $D/r20_initl.py
+$PY $D/r20_fr_transfer.py
+$PY $D/r20_fr_veto.py
+$PY $D/r20_merge_fr.py
+FR=lp,lp2,gap,lx1,lx2,n_cand,is_india,n_conf_s,sum_p_s,n_q_s,rk_s,n_conf_s_same_src,n_same_nums,n_same_name,n_same_addr,cls_s,cls_c,s_eq_c,cn_c,nE,nM,n_shared,supE_min,supE_max,supE_any,supM_min,supM_max,supM_any,is_acr,q_addr_empty,is_s3,d_dbl,q_tri,d_sfx,d_frac,d_rep,q_brack,q_paren,q_hash,ce,ce_xl
+FPFX=f12ce TEST_C=France OUT=pfr $PY $D/stage3.py fit $FR
+$PY $D/r20_fr_precision.py
+$PY $D/r20_patch_fr.py output/matching_results.tsv "$R20/fr_pairs_R3.parquet" output_r20/fr/matching_results.tsv
+$PY $D/r20_patch_add.py output_r20/fr/matching_results.tsv "$R20/rescue4_add_test_India.parquet" output_r20/in/matching_results.tsv
+$PY $D/r20_patch_add.py output_r20/in/matching_results.tsv "$R20/rescue4_add_test_US.parquet" output_r20/final/matching_results.tsv
+#    f) candidate_pairs.tsv = original blocking candidates U every rescue-scored pair (the rescue model runs inference on them)
 $PY $D/r20_regen_cands.py output_r20/final/candidate_pairs.tsv output_r20/final/matching_results.tsv India,US

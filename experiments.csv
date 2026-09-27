@@ -30,3 +30,9 @@ time,name,cv,lb,notes
 2026-09-27 19:24,R20f_best,,,s8b + France P1 - refined veto (1513) + India rescue v2 + US rescue; output_r20f validator PASS; projected 0.98898
 2026-09-27 19:27,R20g_fallback,,,s8b + India rescue v2 + US rescue (France unchanged); output_r20g validator PASS; projected 0.98858
 2026-09-27 19:29,R20h_fr_ext,,,R20f + France transfer extension E1/E2 (+3727 France links); output_r20h validator PASS; projected 0.98917; final if upload 1 confirms transfer
+2026-09-27 21:10,R20j_rescue_ce_v4,0.99262(India)/0.99237(US),,s8b + rescue v4 (xlm-r-large CE trained on rescue candidates + LightGBM with CE rank/gap/margin); India OOF +0.00155 (v2 +0.00108) test +18586; US +0.00028 test +2115; output_r20j sha ac54a967; France = s8b; projected 0.98860-0.98895; rescue v3 (relative feats only) = v2 (negative)
+2026-09-27 21:30,R20k_fr_precision_R2,,,r20j + France removals: pfr (France stage 3) drops AND xl<0.3 (excl. edit-added, acronym, TN appends, no_shared) + veto2 = -6294 France links; output_r20k sha a2553c98; projected 0.9888-0.9897
+2026-09-27 21:34,R20l_fr_precision_R3,,0.989472,r20j + France R3 (R2 minus TN swaps) + veto2 = -3164 France links; output_r20l sha 99a0fc04; projected 0.9887-0.9894
+2026-09-27 22:27,R20o_last_upload_plan,,,last upload = output_r20k (r20l + 3130 TN-swap removals) as free test; final zip r20l unless r20k scores higher; package ported (r20_merge_fr, r20_fr_precision)
+2026-09-27 22:37,R20p_last_upload,,0.989507,r20l + 2375 France adds (pfr>=0.95 & xl>=0.95, excl P1/cat/TN/gen) - 74 ext removals; r20k dropped by swap-rate test (~90% of cat>TN swaps are true noise); output_r20p sha 627aea51; LB rank 108 (upload 3 of 3); zip stays r20l
+2026-09-27 23:10,R21_listwise_ce_abandoned,,,idea 1 (listwise CE top-4 uncertain US/India) not started: 57 min left vs 2-3 h needed; r20p uploaded 23:30 = 0.989507 rank 108; final zip stays r20l (sha 99a0fc04)

@@ -107,10 +107,25 @@ Scripts live in `src/stage3/`; `src/stage3/run_stage3.sh` runs the whole stage i
    - (d) drop +GEN-shifted links that are +GEN against the consensus too;
    - (e) add x3's equal-address true-noise-word links that the large cross-encoder backs (> 0.72).
 7. **Write** (`compose.py output output`, `P3=p8b`, `FR_PAIRS=…/fr_pairs_acde.parquet`), then validate as above. Every link is a candidate pair (an argmax or runner-up row).
-8. **R20 (final day)**, `run_stage3.sh` step 8 (work dir `R20_DIR`, default `$S3_DIR/r20`):
-   - **France structural transfer** (`r20_fr_table.py`, `r20_cells.py`, `r20_initl.py`, `r20_fr_transfer.py`). Vocabulary-free structural cells get their US and India truth rates. France links are added only in same-street cells that cannot hold a France category-swap distractor, where both countries are ≥ 93% true and the large cross-encoder agrees (≥ 0.8). Links in +GEN cells (≤ 15% true in both) and initialism edits the cross-encoder rejects are removed.
-   - **France cross-encoder veto** (`r20_fr_veto.py`, `r20_patch_fr.py`). Linked pairs the large cross-encoder scores ≤ 0.05 are dropped in address-driven classes (same name / drop / typo / no shared word).
-   - **Blocking rescue for India and US** (`r20_block2.py`, `r20_block3.py`, `r20_rescue_feats.py`, `r20_rescue_train.py`, `r20_rescue_apply.py`, `r20_patch_add.py`). For queries left unlinked that have an address, two retrievals propose new pairs: an address-heavy TF-IDF pass (name 0.1 / address 0.8 / char 0.1, top 10) and a name-twin expansion (same core name, ranked by IDF-weighted shared address tokens, top 10). A LightGBM rescue scorer, cross-fitted P0 ↔ P1, links the best new candidate if its score is ≥ τ (India 0.80, US 0.85). Out-of-fold: India 0.99107 → 0.99215, US 0.99210 → 0.99228.
+8. **R20 (final day)**, `run_stage3.sh` step 8 (work dir `R20_DIR`, default `$S3_DIR/r20`).
+   - **Blocking rescue for India and US** (`r20_block2.py`, `r20_block3.py`, `r20_rescue_feats.py`, `r20_rescue_train.py`). For queries left unlinked that have an address, two retrievals propose new pairs:
+     - an address-heavy TF-IDF pass (name 0.1 / address 0.8 / char 0.1, top 10);
+     - a name-twin expansion (same core name, ranked by IDF-weighted shared address tokens, top 10).
+
+     A v2 LightGBM rescue scorer (28 vocabulary-free features, cross-fitted P0 ↔ P1) ranks them.
+   - **Rescue cross-encoder** (`r20_build_rce.py`, `r20_rce_train.py`, GPU):
+     - input: for target queries whose best v2 score is ≥ 0.03, the top 4 candidates;
+     - model: xlm-roberta-large, fine-tuned for 3 passes on one pool's candidates (raw "name | address" of both records);
+     - scoring: the model scores the other pool and test.
+   - **Rescue v4** (`r20_rescue4.py`, `r20_patch_add.py`): the v2 features plus the cross-encoder logit and its within-query rank, gap to the best and margin over the runner-up. It links the best new candidate when its score is ≥ τ.
+     - India: τ 0.7, out-of-fold 0.99107 → 0.99262.
+     - US: τ 0.85, out-of-fold 0.99210 → 0.99237.
+   - **France precision removals** (`r20_fr_table.py`, `r20_fr_veto.py`, `r20_merge_fr.py`, `stage3.py fit` with `FPFX=f12ce TEST_C=France OUT=pfr`, `r20_fr_precision.py`, `r20_patch_fr.py`).
+     - Removes s8b France links that a France stage-3 re-scorer drops **and** the large cross-encoder rejects (< 0.3).
+     - Keeps the leaderboard-backed classes: true-noise words, acronyms, coined or concatenated names, and edit-added links.
+     - Adds the cross-encoder address veto.
+     - Result: −3,164 links. Final leaderboard 0.989472.
+   - **Not in the final:** the France structural transfer (`r20_fr_transfer.py`) scored 0.987654 on the leaderboard against 0.987777 without it.
    - `r20_regen_cands.py` writes `candidate_pairs.tsv` = original candidates ∪ every rescue-scored pair (128,969,685 pairs) and stream-checks that matches ⊆ candidates.
 
 Optional: `$R loco` (leave-one-country-out check). The quick path that produced the first leaderboard file (tier 0) is `train1 --tier0` then `predict --tier0`: stage 1 trained on P0 only, single threshold 0.76, 50 base features.
