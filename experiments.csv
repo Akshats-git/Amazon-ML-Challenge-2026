@@ -18,3 +18,15 @@ time,name,cv,lb,notes
 2026-09-27 01:30,R10x3_full_x3_upload,0.98838,0.982123,output_x3 (x3 France instead of R06 France; US/India = R10h): LB -0.00028 vs R10h -> France keeps x1+x2
 2026-09-27 01:50,R11_diag_mask_ab,,,lexicon dropout A/B 10% P0 unmasked holdout: 0.5 -> 0.003804, 0.3 -> 0.003813, 0 -> 0.003804; no retrain; VM resume failed (IN1 no capacity)
 2026-09-27 09:15,R10d_hyb34_upload,0.98848,0.982556,final file output_hyb34 = x3+x4 blend US/India (0.56,0.74) + x1+x2 France (0.52,0.74), caps; LB 0.982556 rank 434 (new best, +0.000155 vs R10h)
+2026-09-27 11:00,R14_stage3_argmax,0.98963,0.984009,stage-3 LightGBM on argmax rows (x1-x4 p + consensus + raw-text + acronym features) US/India; France R06; output_s3; OOF US 0.99062 India 0.98815
+2026-09-27 12:40,R15_followups,,,patna harmless; stage4 worse; top2 rerank 0.98962 (=R14); France stage3 no clear signal; K50 blocking probes negative; plug-in test US~0.988 India~0.985 France~0.967
+2026-09-27 13:30,R16_stage3_CE_france_acd,0.99140,,xlm-r-base CE on raw text as stage-3 feature (US 0.99187 India 0.99070) + France R06 with LB-evidenced edits a/c/d; output_s6b validated; not uploaded
+2026-09-27 15:45,R18_largeCE_top2,0.99163,,xlm-r-large CE; stage3 base+large 0.99152; top-2 rerank+large 0.99163 (US 0.99203 India 0.99104); France edit e (CE-backed TN adds); checkpoint output_s8 validated; projected LB ~0.9885
+2026-09-27 16:10,R19_final_s8b,0.99165,0.987777,final: top-2 rerank xl+xr CE US/India + France R06 edits a/c/d/e; output_s8b; zip built; projected LB ~0.9885; LB rank 145 (uploaded ~17:05)
+2026-09-27 17:55,R20a_fr_transfer_P1,0.99165,0.987654,s8b + France structural-transfer package P1 (+4317/-138 France links; US/India identical); output_r20a; validator PASS; projected LB 0.98800; p8b decomposition blocked-out +0.00384 (India +0.00526)
+2026-09-27 18:20,R20b_india_rescue,0.99181(India),,address-heavy second retrieval (0.1/0.8/0.1 K10) for unlinked India queries + LightGBM rescue scorer tau 0.8; OOF India 0.99107->0.99181; test +8258 India links; output_r20b (=R20a+rescue) projected 0.98845; output_r20c (=s8b+rescue)
+2026-09-27 18:58,R20d_rescue_v2_US,0.99215(India)/0.99228(US),,India rescue v2 (second retrieval + name-twin expansion) OOF +0.00108 India F, test +12928; US rescue OOF +0.00018, test +1482; output_r20d = R20a + both; projected 0.98880; plug-in formula bug fixed (was F2-like)
+2026-09-27 19:08,R20e_fr_veto_full,,,s8b + France P1 - France CE veto (1737 links) + India rescue v2 + US rescue; output_r20e validator PASS; projected 0.98900
+2026-09-27 19:24,R20f_best,,,s8b + France P1 - refined veto (1513) + India rescue v2 + US rescue; output_r20f validator PASS; projected 0.98898
+2026-09-27 19:27,R20g_fallback,,,s8b + India rescue v2 + US rescue (France unchanged); output_r20g validator PASS; projected 0.98858
+2026-09-27 19:29,R20h_fr_ext,,,R20f + France transfer extension E1/E2 (+3727 France links); output_r20h validator PASS; projected 0.98917; final if upload 1 confirms transfer

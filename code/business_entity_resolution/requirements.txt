@@ -7,3 +7,9 @@ rapidfuzz==3.14.6
 Unidecode==1.4.0
 lightgbm==4.7.0
 pyarrow==25.0.1
+# stage-3 cross-encoder (GPU step; versions of the A100 box that trained it)
+torch==2.11.0
+transformers==5.7.0
+sentencepiece==0.2.2
+tiktoken==0.14.0
+protobuf==7.36.2
