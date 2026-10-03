@@ -26,7 +26,7 @@ print('veto after the address-similarity rule', V.height)
 rate={'eq':0.03,'na':0.09,'other':0.10}
 V=V.with_columns(t=pl.col('num').replace_strict(rate,return_dtype=pl.Float64))
 print('expected units if removed (0.21 per FP removed, 0.09 per TP lost):', round(((1-V['t'])*0.21-V['t']*0.09).sum(),1))
-V.select('s1_row','q_row').write_parquet(f'{R}/fr_veto.parquet')
+V.select('s1_row','q_row').write_parquet(f'{R}/fr_veto2.parquet')  # veto v2, read by r20_fr_precision.py
 # final France pairs = structural-transfer package minus the vetoed links
 P1=pl.read_parquet(f'{R}/fr_pairs_P1.parquet')
 P1.join(V.select('s1_row','q_row'),on=['s1_row','q_row'],how='anti').write_parquet(f'{R}/fr_pairs_P1V.parquet')

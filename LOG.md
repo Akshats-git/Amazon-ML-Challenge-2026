@@ -39,8 +39,9 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
 | R20p | 27 Sep 22:37 | r20l + 2,375 France adds (pfr p3 ≥ 0.95 ∧ large CE ≥ 0.95, x1+x2 unlinked; excluding upload-1 adds, category/TN classes and +GEN) − 74 more R3-pattern removals | US/India = r20j | – | **0.989507** | **108** | `output_r20p/` uploaded ~23:30 (upload 3 of 3); **best public score, +0.000035 vs r20l** (projected 0.98947–0.98960). Below the 0.989522 switch bar and not reproducible from the package code, so the final zip stays r20l |
 | R20h | 27 Sep 19:29 | R20f + France transfer extension E1/E2 (+3,727 France links in the same Type-B-proof cells; street matched after stripping region/department words) | – | – | not uploaded | – | `output_r20h/` validator PASS; final if upload 1 confirms the France transfer; projected 0.98917 |
 | R21 | 27 Sep 23:10 | listwise cross-encoder for uncertain US/India queries (handoff idea 1) | – | – | not built | – | **abandoned**: started at 23:02 with 57 min left; needs 2–3 h (idea 2 ≈ 85 min). Final zip stays r20l |
+| R22 | 28 Sep 19:55 | final package: zip switched to R20p, 5 packaged-code bugs fixed, R20p step ported, byte-level reproduction check | US 0.99237, India 0.99262 | – | 0.989507 (R20p) | pending | `SteinsGate_submission.zip` holds `output_r20p` (sha `627aea51…`); doc rewritten for the methodology request (deadline 29 Sep 10:00) |
 
-**Current best on LB:** **R20p `output_r20p/` = 0.989507 public, rank 108** (27 Sep ~23:30; r20l + 2,371 France adds − 74 removals; the rank fell as other teams improved). **The final zip holds R20l `output_r20l/` = 0.989472, rank 96** (27 Sep ~21:50; s8b + India/US rescue v4 + France R3 removals). Before: **R19 `output_s8b/` = 0.987777 public, rank 145** (27 Sep ~17:05; the user got 2 extra submissions, so 3 uploads are left). Top-2 re-rank with xlm-roberta cross-encoders for US/India; R06 France + edits (a, c, d, e). Previous: R14 `output_s3/` 0.984009 (rank 347).
+**Current best on LB:** **R20p `output_r20p/` = 0.989507 public** (27 Sep ~23:30; rank 108 at upload, final rank pending). **The final zip now holds R20p** (R22, 28 Sep): the packaged code rebuilds it byte for byte. Before: R20l `output_r20l/` = 0.989472 (rank 96 at the time); R19 `output_s8b/` = 0.987777 (rank 145).
 
 ---
 
@@ -959,3 +960,28 @@ Newest entries go at the **bottom**, and each gets a short ID (`R01`, `R02` …)
 - **23:13, more GPUs?** No. Setup, row build, p8b refit + T1/T2, compose/validate, upload and zip take ≥ 35 min without any GPU work, so ≤ 10 min of GPU time would be left. That fits only a toy base CE on top-2 rows, which p8b's large CE already scores (R18 took 78 min train + 30 min scoring at this scale).
 - **Takeaway:** idea 1 needed ≈ 3 h and had to start by ~20:30. It remains the best next lever (+0.0003–0.0012 LB) if there is ever another round.
 
+
+## R22 · final package: R20p zip, packaged-code fixes, reproduction check · 28 Sep 19:55
+- **Why:** the methodology and zip request (deadline 29 Sep 10:00) asks for the *best* submission. R20p (0.989507) is both the best and the last upload, but its France step lived only on the VM. The user chose R20p if the code reproduces it exactly, else R20l.
+- **Approach:**
+  - Found the R20p scripts in the R20 session scratch (`r20/addchk.py`, `r20/ext4.py`, composition command in the transcript) and ported them as `src/stage3/r20_fr_final.py`. The exclusion set is `pkg1.py`'s add cells (not the narrower upload-1 pairs).
+  - `run_stage3.sh`: new step 8f (R20p) after R20l, step 8h copies both files to `output/`; steps 1–2 now also build the x1+x2 pool tables (`g12`/`f12` for P0/P1 US/India) that the France stage-3 fit needs (they were missing).
+  - **Bugs fixed in the packaged code** (all from the automated port on 27 Sep): `r20_block2.py` and `r20_regen_cands.py` used an undefined `fR` (NameError); `r20_fr_transfer.py` overwrote the dir variable `R` with a DataFrame (crash); `r20_fr_veto.py` wrote `fr_veto.parquet` but `r20_fr_precision.py` reads `fr_veto2.parquet`. pyflakes is clean apart from two false positives (`tok` read by a closure before `del`).
+  - `run_all.sh` and `setup_box.sh` moved into `src/` (the brief wants all source under `src/`).
+  - README and `docs/Documentation_BER.md` rewritten in plain language (no ranks, as the user asked).
+- **Data:** laptop, `S3_DIR=work/r19_scratch` tables, memory-capped scopes (the cell step needs ~4.5 GB; the user closed Chrome).
+- **Results:**
+  - Rebuilt from the stored tables with the packaged scripts: transfer adds 4,324 / rem 51 / initialism 87 (upload-1 pairs identical to the VM copy); veto 1,513; R3 2,949 (−3,164 with the veto); R3 pairs 854,578; R20p step −74 / +2,375.
+  - Pipeline order s8b → France R3 → India → US rescue gives `output_r20l` byte-identical (`99a0fc04…`); patching R3P gives `output_r20p` byte-identical (`627aea51…`).
+  - Final file: 5,838,881 links (US 2,249,303, India 2,732,705, France 856,873), 5.8% empty.
+  - Zip: validator PASS (`--check-ids`), candidate stream check OK (128,969,685 ids, matches within candidates), 60 entries, zipped files equal the repo and `output_r20p`.
+- **Not checked end to end:** the GPU steps and the rescue tables (they exist only on the paused VM), so `r20_regen_cands.py` and `r20_block2.py` fixes are checked by pyflakes only.
+- **LB:** 0.989507 (R20p); final rank pending.
+
+## R22b · rerun check of the packaged stage-3 CPU steps on the VM · 28 Sep 21:50
+- **Approach:** resumed the CPU VM (now `519972`, 32 vCPU) and ran every CPU step of `run_stage3.sh` step 1–2 (new g12/f12 pool tables) and step 8 with the packaged code into `~/chk` and `~/chk2` (original tables read through read-only symlinks, nothing overwritten). GPU training not rerun: the stored cross-encoder scores were used. Compared every table with the originals.
+- **Round 1 (32 threads):** all 51 steps exit 0. Identical: g12→f12 and f12ce pool tables, frg, fr_pairs_P1, fr_veto2, all b2_a retrievals, and **`candidate_pairs.tsv` (sha `c4f0dda6…`)**, so the `r20_block2`/`r20_regen_cands` fixes are confirmed. Differed: the France stage-3 fit (p3 up to 0.037, T1 0.56 vs 0.58) and the rescue models.
+- **Cause 1 (fixed):** the packaged `stage3.py` had `num_threads=6` (laptop), the original France fit used `stack2.py` with 16. Set to 16. **Round 2:** France thresholds and OOF F equal to every digit, `fr_pairs_R3` and `fr_pairs_R3P` identical. The top-2 re-rank refit (`top2.py`, 16 threads) matches p8b (scores within 1e-8, same thresholds (0.58, 0.78), same OOF 0.991654).
+- **Cause 2 (documented, not fixable after the fact):** rescue features differ by ~1e-5 in summed IDF (polars group_by float sums; also with POLARS_MAX_THREADS=16), and the holdout draw uses an unordered `unique()`. The retrained rescue models give the same OOF gain (India +0.00154 vs +0.00156; US +0.00027 vs +0.00028) but 97% (India) / 99% (US) the same additions. Rerun final file vs uploaded r20p: 488 + 589 = 1,077 of 5,838,881 links differ (0.02%).
+- **Package:** README §6 and doc Appendix A state these results; zip rebuilt.
+- **Cost:** ~₹98 (balance ₹315). VM paused at 21:44; watchdog guards `519972`.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Final stage (R18/R19): top-2 re-rank with two cross-encoders for US/India + evidence-backed France edits.
+# Final stage: top-2 re-rank with two cross-encoders for US/India (R18/R19), evidence-backed France edits, and the
+# final-day steps (R20): India/US blocking rescue with a rescue cross-encoder, France precision removals and additions.
 # Prerequisites (README "Commands"): runs x1..x4, `OUTPUT_DIR=output_x3 run.py predict` (x3's own file, used by France
 # edit e) and the final `BLEND_TAGS_UNSEEN=x1,x2 run.py blend --tags x3 x4`, which writes output/.
 # Run from the data directory. Tables go to work/stage3 (S3_DIR). Steps 5-6 need a CUDA GPU (one A100 40GB:
@@ -11,15 +12,18 @@ export S3_DIR=${S3_DIR:-work/stage3}
 CE=$S3_DIR/ce
 mkdir -p "$CE" "$S3_DIR/ceout"
 
-# 1. argmax tables (stage-2 blend x3+x4 for US/India; x1+x2 for France) and top-2 tables (argmax + runner-up rows)
+# 1. argmax tables (stage-2 blend x3+x4 for US/India; x1+x2 for France) and top-2 tables (argmax + runner-up rows).
+#    The x1+x2 tables of the US/India pools (g12) train the France stage-3 model of step 8e.
 for p in P0 P1 test; do for c in US India; do
   BLEND=x3,x4 PFX=g $PY $D/tables.py $p $c
   BLEND=x3,x4 PFX=h $PY $D/tables_top2.py $p $c
 done; done
+for p in P0 P1; do for c in US India; do BLEND=x1,x2 PFX=g12 $PY $D/tables.py $p $c; done; done
 BLEND=x1,x2 PFX=g12 $PY $D/tables.py test France
 
 # 2. top-2 features (consensus with the S1's other queries, raw-text perturbations, model disagreement, competing row)
 for p in P0 P1 test; do for c in US India; do HPFX=h KPFX=k $PY $D/top2.py build $p $c; done; done
+for p in P0 P1; do for c in US India; do GPFX=g12 FPFX=f12 $PY $D/stage3.py build $p $c; done; done   # for step 8e
 GPFX=g12 FPFX=f12 $PY $D/stage3.py build test France          # France consensus features for the France edits
 
 # 3. cross-encoder text pairs: uncertain argmax rows (0.003 < p < 0.997, +4% of the rest on the pools) ...
@@ -98,6 +102,13 @@ FPFX=f12ce TEST_C=France OUT=pfr $PY $D/stage3.py fit $FR
 $PY $D/r20_fr_precision.py
 $PY $D/r20_patch_fr.py output/matching_results.tsv "$R20/fr_pairs_R3.parquet" output_r20/fr/matching_results.tsv
 $PY $D/r20_patch_add.py output_r20/fr/matching_results.tsv "$R20/rescue4_add_test_India.parquet" output_r20/in/matching_results.tsv
-$PY $D/r20_patch_add.py output_r20/in/matching_results.tsv "$R20/rescue4_add_test_US.parquet" output_r20/final/matching_results.tsv
-#    f) candidate_pairs.tsv = original blocking candidates U every rescue-scored pair (the rescue model runs inference on them)
+$PY $D/r20_patch_add.py output_r20/in/matching_results.tsv "$R20/rescue4_add_test_US.parquet" output_r20/r20l/matching_results.tsv  # LB 0.989472
+#    f) (R20p, final) France additions where the France stage-3 model and the large CE both give >= 0.95 (outside the
+#       category / true-noise-word classes, +GEN shifts and the upload-1 transfer cells) and 74 more R3-pattern removals
+$PY $D/r20_fr_final.py
+$PY $D/r20_patch_fr.py output_r20/r20l/matching_results.tsv "$R20/fr_pairs_R3P.parquet" output_r20/final/matching_results.tsv  # LB 0.989507
+#    g) candidate_pairs.tsv = original blocking candidates U every rescue-scored pair (the rescue model runs inference on them)
 $PY $D/r20_regen_cands.py output_r20/final/candidate_pairs.tsv output_r20/final/matching_results.tsv India,US
+#    h) the two submission files
+rm -f output/matching_results.tsv output/candidate_pairs.tsv
+cp output_r20/final/matching_results.tsv output_r20/final/candidate_pairs.tsv output/

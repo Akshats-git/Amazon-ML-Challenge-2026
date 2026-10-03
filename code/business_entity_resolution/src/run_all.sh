@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full pipeline, run from the directory holding data/ (or set DATA_DIR). Produces output/matching_results.tsv and
-# output/candidate_pairs.tsv. On a 13 GB laptop:  N_JOBS=8 BLOCK_THREADS=4 bash code/business_entity_resolution/run_all.sh
-#   START=<step> bash code/business_entity_resolution/run_all.sh    # resume from a step
+# output/candidate_pairs.tsv. On a 13 GB laptop:  N_JOBS=8 BLOCK_THREADS=4 bash code/business_entity_resolution/src/run_all.sh
+#   START=<step> bash code/business_entity_resolution/src/run_all.sh    # resume from a step
 set -euo pipefail
 R="python code/business_entity_resolution/src/run.py"
 mkdir -p work/logs

@@ -16,7 +16,7 @@ from ber.submit import write_candidates, check_candidates
 out, match, cs = sys.argv[1], sys.argv[2], [c for c in sys.argv[3].split(',') if c]
 orig=pl.concat([pl.read_parquet(f'work/cands/test_{c}.parquet',columns=['q_row','s1_row']) for c in ('US','India','France')])
 print('original pairs', f'{orig.height:,}')
-add=[pl.read_parquet(fR+'/rf_test_{c}.parquet',columns=['q_row','s1_row']) for c in cs]
+add=[pl.read_parquet(f'{R}/rf_test_{c}.parquet',columns=['q_row','s1_row']) for c in cs]
 allp=pl.concat([orig]+add).unique() if add else orig
 print('rescue-scored pairs', f'{sum(a.height for a in add):,}', ' union', f'{allp.height:,}', ' new', f'{allp.height-orig.height:,}')
 s1_ids=pl.read_parquet(io.norm_path('test',1),columns=['entity_id'])['entity_id']

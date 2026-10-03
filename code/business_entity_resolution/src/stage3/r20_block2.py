@@ -25,7 +25,7 @@ import glob
 old = pl.read_parquet(B.cand_path(part, cty), columns=['q_row','s1_row']) if B.cand_path(part, cty).exists() else pl.concat([pl.read_parquet(f, columns=['q_row','s1_row']) for f in sorted(glob.glob(f'work/feats/{part}/{cty}_part-*.parquet'))])
 new = c2.join(old, on=['q_row','s1_row'], how='anti')
 print(f'{part} {cty} W={W} K={K}: new pairs {new.height:,} of {c2.height:,}  ({time.time()-t:.0f}s)')
-new.write_parquet(fR+'/b2_{tag}_{part}_{cty}.parquet')
+new.write_parquet(f'{R}/b2_{tag}_{part}_{cty}.parquet')
 if split=='train':
     gt = io.gt_rows()
     truth = gt.filter(pl.col('s1_row').is_in(pl.Series(s1_rows).implode()) & pl.col('q_row').is_in(pl.Series(q_rows).implode()))

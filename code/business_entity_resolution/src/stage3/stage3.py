@@ -96,7 +96,7 @@ FEATS = ['lp', 'lp2', 'gap', 'lx1', 'lx2', 'lx3', 'lx4', 'n_cand', 'is_india',
          'is_acr', 'q_same_name_all', 's1_same_name', 'q_addr_empty', 'is_s3',
          'd_dbl', 'q_tri', 'd_acc', 'd_sfx', 'd_frac', 'd_rep', 'q_brack', 'q_paren', 'q_hash']
 PARAMS = dict(objective='binary', learning_rate=0.05, num_leaves=63, min_child_samples=200, feature_fraction=0.8, bagging_fraction=0.8,
-              bagging_freq=1, lambda_l2=1.0, verbose=-1, num_threads=6, seed=7)
+              bagging_freq=1, lambda_l2=1.0, verbose=-1, num_threads=16, seed=7)  # 16 threads: LightGBM results depend on the thread count
 
 
 def _load(part, cols, cs=('US', 'India')):
